@@ -1,0 +1,5 @@
+{
+  "name": "Adept Timesheet Application",
+  "description": "A high-performance timesheet and budget tracking system for cleaning operations managers. Features automated budget variance flagging, site-specific assignments, and AI-powered operational insights.",
+  "requestFramePermissions": []
+}

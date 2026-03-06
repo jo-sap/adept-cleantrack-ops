@@ -1,0 +1,300 @@
+
+import React, { useMemo, useState, useEffect } from 'react';
+import { Site, TimeEntry, FortnightPeriod, Cleaner } from '../types';
+import { ChevronRight, DollarSign, PieChart } from 'lucide-react';
+import MiniComplianceGrid from './MiniComplianceGrid';
+import { useRole } from '../contexts/RoleContext';
+import { useAppAuth } from '../contexts/AppAuthContext';
+import { getGraphAccessToken } from '../lib/graph';
+import { getDashboardMetrics, type DashboardMetrics } from '../repositories/metricsRepo';
+import { getAssignedSiteIdsForManager } from '../repositories/siteManagersRepo';
+import { DEV_BYPASS_LOGIN } from '../config/authFlags';
+import { formatCurrencyAUD, formatCurrencyAUDSignedExpense, formatPercent } from '../utils';
+
+interface DashboardProps {
+  sites: Site[];
+  cleaners: Cleaner[];
+  entries: TimeEntry[];
+  currentPeriod: FortnightPeriod;
+  onViewSite: (siteId: string) => void;
+}
+
+const Dashboard: React.FC<DashboardProps> = ({ sites, cleaners, entries, currentPeriod, onViewSite }) => {
+  const { isAdmin: isAdminFromRole } = useRole();
+  const { user } = useAppAuth();
+  const isAdmin = isAdminFromRole || user?.role === "Admin";
+  const [kpiMetrics, setKpiMetrics] = useState<DashboardMetrics | null>(null);
+  const [kpiLoading, setKpiLoading] = useState(false);
+  const [kpiError, setKpiError] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!isAdmin && user?.role !== "Manager") return;
+    if (DEV_BYPASS_LOGIN) {
+      setKpiMetrics({
+        portfolioRevenue: 10000,
+        laborExpenses: 7000,
+        netGrossProfit: 3000,
+        profitMargin: 0.3,
+      });
+      setKpiError(null);
+      return;
+    }
+    let cancelled = false;
+    setKpiLoading(true);
+    setKpiError(null);
+    getGraphAccessToken()
+      .then((token) => {
+        if (cancelled) return;
+        if (!token) {
+          setKpiError("Microsoft Graph not available.");
+          setKpiMetrics({ portfolioRevenue: 0, laborExpenses: 0, netGrossProfit: 0, profitMargin: 0 });
+          setKpiLoading(false);
+          return;
+        }
+        const range = {
+          start: currentPeriod.startDate,
+          end: new Date(currentPeriod.endDate.getTime() + 24 * 60 * 60 * 1000),
+        };
+        const options =
+          user?.role === "Manager" && user?.email
+            ? { assignedSiteIds: [] as string[] }
+            : undefined;
+        if (options && user?.email) {
+          return getAssignedSiteIdsForManager(token, user.email).then((ids) => {
+            if (cancelled) return;
+            options.assignedSiteIds = ids;
+            return getDashboardMetrics(token, range, options).then((res) => {
+              if (cancelled) return;
+              setKpiMetrics(res.metrics);
+              setKpiError(res.error ?? null);
+            });
+          });
+        }
+        return getDashboardMetrics(token, range).then((res) => {
+          if (cancelled) return;
+          setKpiMetrics(res.metrics);
+          setKpiError(res.error ?? null);
+        });
+      })
+      .then(() => { if (!cancelled) setKpiLoading(false); })
+      .catch((err) => {
+        if (!cancelled) {
+          setKpiError(err instanceof Error ? err.message : "Failed to load dashboard metrics.");
+          setKpiMetrics(null);
+          setKpiLoading(false);
+        }
+      });
+    return () => { cancelled = true; };
+  }, [isAdmin, user?.role, user?.email, currentPeriod.startDate.getTime(), currentPeriod.endDate.getTime()]);
+
+  // Pre-process entries into a map for efficient lookups
+  const siteDailyMap = useMemo(() => {
+    const map: Record<string, Record<string, number>> = {};
+    entries.forEach(e => {
+      const date = new Date(e.date);
+      if (date >= currentPeriod.startDate && date <= currentPeriod.endDate) {
+        if (!map[e.siteId!]) map[e.siteId!] = {};
+        map[e.siteId!][e.date] = (map[e.siteId!][e.date] || 0) + e.hours;
+      }
+    });
+    return map;
+  }, [entries, currentPeriod]);
+
+  // Financial Metrics Pass
+  const financialMetrics = useMemo(() => {
+    let totalPortfolioRevenue = 0;
+    let totalPortfolioLaborCost = 0;
+
+    const recap = sites.map(site => {
+      const dailyActuals = siteDailyMap[site.id] || {};
+      let actualHoursTotal = 0;
+      let laborCostTotal = 0;
+
+      // Filter entries for this site and period
+      const siteEntries = entries.filter(e => {
+        const d = new Date(e.date);
+        return e.siteId === site.id && d >= currentPeriod.startDate && d <= currentPeriod.endDate;
+      });
+
+      siteEntries.forEach(e => {
+        actualHoursTotal += e.hours;
+        const cleaner = cleaners.find(c => c.id === e.cleanerId);
+        const rate = e.pay_rate_snapshot || cleaner?.payRatePerHour || 0;
+        laborCostTotal += e.hours * rate;
+      });
+
+      const budgetHoursTotal = site.budgeted_hours_per_fortnight;
+      const varianceHours = actualHoursTotal - budgetHoursTotal;
+      
+      // Fortnightly Revenue = (Monthly * 12) / 26
+      const fortnightRevenue = (site.monthly_revenue * 12) / 26;
+      const grossProfit = fortnightRevenue - laborCostTotal;
+      const margin = fortnightRevenue > 0 ? (grossProfit / fortnightRevenue) * 100 : 0;
+
+      totalPortfolioRevenue += fortnightRevenue;
+      totalPortfolioLaborCost += laborCostTotal;
+
+      return {
+        id: site.id,
+        name: site.name,
+        actualHoursTotal,
+        budgetHoursTotal,
+        varianceHours,
+        fortnightRevenue,
+        laborCostTotal,
+        grossProfit,
+        margin,
+        dailyActuals
+      };
+    });
+
+    return { 
+      recap, 
+      totalPortfolioRevenue, 
+      totalPortfolioLaborCost,
+      totalGrossProfit: totalPortfolioRevenue - totalPortfolioLaborCost,
+      portfolioMargin: totalPortfolioRevenue > 0 ? ((totalPortfolioRevenue - totalPortfolioLaborCost) / totalPortfolioRevenue) * 100 : 0
+    };
+  }, [sites, cleaners, entries, currentPeriod, siteDailyMap]);
+
+  // Use API KPIs when present and non-zero; otherwise use client-computed financial metrics (sites + entries)
+  const displayMetrics = useMemo(() => {
+    const fromApi = kpiMetrics && (kpiMetrics.portfolioRevenue > 0 || kpiMetrics.laborExpenses > 0);
+    if (fromApi && kpiMetrics) {
+      return {
+        portfolioRevenue: kpiMetrics.portfolioRevenue,
+        laborExpenses: kpiMetrics.laborExpenses,
+        netGrossProfit: kpiMetrics.netGrossProfit,
+        profitMargin: kpiMetrics.profitMargin,
+      };
+    }
+    return {
+      portfolioRevenue: financialMetrics.totalPortfolioRevenue,
+      laborExpenses: financialMetrics.totalPortfolioLaborCost,
+      netGrossProfit: financialMetrics.totalGrossProfit,
+      profitMargin: financialMetrics.portfolioMargin / 100,
+    };
+  }, [kpiMetrics, financialMetrics]);
+
+  return (
+    <div className="space-y-8 animate-fadeIn">
+      {/* Financial KPIs (Admin: all sites; Manager: assigned sites only) */}
+      {(isAdmin || user?.role === "Manager") && (
+        <>
+          {kpiError && (
+            <p className="text-sm text-amber-700 bg-amber-50 border border-amber-200 rounded-lg px-4 py-2">
+              {kpiError}
+            </p>
+          )}
+          <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+            <div className="bg-[#f7f6f3] p-5 rounded-lg border border-[#edeef0]">
+              <p className="text-[11px] font-bold text-gray-400 uppercase tracking-wider mb-1">Portfolio Revenue</p>
+              {kpiLoading ? (
+                <h3 className="text-2xl font-bold text-gray-400">Loading…</h3>
+              ) : (
+                <h3 className="text-2xl font-bold text-gray-900">
+                  {formatCurrencyAUD(displayMetrics.portfolioRevenue)}
+                </h3>
+              )}
+            </div>
+            <div className="bg-[#f7f6f3] p-5 rounded-lg border border-[#edeef0]">
+              <p className="text-[11px] font-bold text-gray-400 uppercase tracking-wider mb-1">Labor Expenses</p>
+              {kpiLoading ? (
+                <h3 className="text-2xl font-bold text-gray-400">Loading…</h3>
+              ) : (
+                <h3 className="text-2xl font-bold text-red-600">
+                  {formatCurrencyAUDSignedExpense(displayMetrics.laborExpenses)}
+                </h3>
+              )}
+            </div>
+            <div className="bg-[#f7f6f3] p-5 rounded-lg border border-[#edeef0]">
+              <p className="text-[11px] font-bold text-gray-400 uppercase tracking-wider mb-1">Net Gross Profit</p>
+              {kpiLoading ? (
+                <h3 className="text-2xl font-bold text-gray-400">Loading…</h3>
+              ) : (
+                <h3 className="text-2xl font-bold text-green-700">
+                  {formatCurrencyAUD(displayMetrics.netGrossProfit)}
+                </h3>
+              )}
+            </div>
+            <div className="bg-[#f7f6f3] p-5 rounded-lg border border-[#edeef0]">
+              <p className="text-[11px] font-bold text-gray-400 uppercase tracking-wider mb-1">Profit Margin</p>
+              {kpiLoading ? (
+                <h3 className="text-2xl font-bold text-gray-400">Loading…</h3>
+              ) : (
+                <div className="flex items-center gap-2">
+                  <h3 className="text-2xl font-bold text-gray-900">
+                    {formatPercent(displayMetrics.profitMargin)}
+                  </h3>
+                  <PieChart size={18} className="text-gray-500" />
+                </div>
+              )}
+            </div>
+          </div>
+        </>
+      )}
+
+      {/* Site Audit Table */}
+      <div className="space-y-6">
+        <h3 className="text-xl font-bold text-gray-900">Portfolio Compliance & Performance</h3>
+        <div className="overflow-x-auto">
+          <table className="w-full border-collapse bg-white border border-[#edeef0] rounded-lg overflow-hidden shadow-sm">
+            <thead>
+              <tr className="bg-[#fcfcfb] border-b border-[#edeef0]">
+                <th className="text-left px-4 py-3 text-[10px] font-bold text-gray-400 uppercase tracking-widest">Site Name</th>
+                <th className="text-center px-4 py-3 text-[10px] font-bold text-gray-400 uppercase tracking-widest">Volume (Hrs)</th>
+                <th className="text-center px-4 py-3 text-[10px] font-bold text-gray-400 uppercase tracking-widest">Variance</th>
+                {isAdmin && <th className="text-center px-4 py-3 text-[10px] font-bold text-gray-400 uppercase tracking-widest">GP Margin</th>}
+                <th className="text-center px-4 py-3 text-[10px] font-bold text-gray-400 uppercase tracking-widest">14D Pattern</th>
+                <th className="px-4 py-3"></th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-[#edeef0]">
+              {financialMetrics.recap.map((recap) => (
+                <tr 
+                  key={recap.id} 
+                  onClick={() => onViewSite(recap.id)}
+                  className="hover:bg-[#f7f6f3] transition-colors cursor-pointer group"
+                >
+                  <td className="px-4 py-4">
+                    <span className="text-sm font-semibold text-gray-900">{recap.name}</span>
+                  </td>
+                  <td className="px-4 py-4 text-center">
+                    <span className="text-xs font-medium text-gray-700">{recap.actualHoursTotal.toFixed(1)}h</span>
+                  </td>
+                  <td className="px-4 py-4 text-center">
+                    <span className={`text-xs font-bold ${recap.varianceHours > 0.1 ? 'text-red-600' : 'text-green-600'}`}>
+                      {recap.varianceHours > 0.1 ? '+' : ''}{recap.varianceHours.toFixed(1)}h
+                    </span>
+                  </td>
+                  {isAdmin && (
+                    <td className="px-4 py-4 text-center">
+                      <span className={`px-2 py-0.5 rounded text-[10px] font-bold ${
+                        recap.margin > 30 ? 'bg-green-50 text-green-700' :
+                        recap.margin > 15 ? 'bg-blue-50 text-blue-700' : 'bg-red-50 text-red-700'
+                      }`}>
+                        {recap.margin.toFixed(0)}%
+                      </span>
+                    </td>
+                  )}
+                  <td className="px-4 py-4 flex justify-center">
+                    <MiniComplianceGrid 
+                      startDate={currentPeriod.startDate}
+                      dailyBudgets={sites.find(s => s.id === recap.id)?.daily_budgets || []}
+                      actualsByDate={recap.dailyActuals}
+                    />
+                  </td>
+                  <td className="px-4 py-4 text-right">
+                    <ChevronRight size={14} className="text-gray-300 group-hover:text-gray-900 transition-colors" />
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  );
+};
+
+export default Dashboard;

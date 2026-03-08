@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useCallback } from "react";
 import { Cleaner } from "../types";
-import { Plus, CreditCard, X, UserCircle, Search, Loader2, Pencil, Layers, Trash2 } from "lucide-react";
+import { Plus, CreditCard, X, UserCircle, Search, Loader2, Layers, Trash2, Pencil, UserMinus, UserPlus } from "lucide-react";
 import { useRole } from "../contexts/RoleContext";
 import { useAppAuth } from "../contexts/AppAuthContext";
 import { getGraphAccessToken } from "../lib/graph";
@@ -75,6 +75,8 @@ const CleanerManager: React.FC<CleanerManagerProps> = ({ onCleanersRefresh }) =>
   const [bulkModalOpen, setBulkModalOpen] = useState(false);
   const [bulkRows, setBulkRows] = useState<BulkCleanerRow[]>([]);
   const [bulkSubmitLoading, setBulkSubmitLoading] = useState(false);
+  const [selectedCleanerIds, setSelectedCleanerIds] = useState<string[]>([]);
+  const [bulkDeleteLoading, setBulkDeleteLoading] = useState(false);
 
   const showToast = useCallback((msg: string) => {
     setToast(msg);
@@ -310,46 +312,128 @@ const CleanerManager: React.FC<CleanerManagerProps> = ({ onCleanersRefresh }) =>
     }
   };
 
+  const selectedSet = new Set(selectedCleanerIds);
+  const toggleSelected = (id: string) => {
+    setSelectedCleanerIds((prev) =>
+      prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]
+    );
+  };
+  const selectAllFiltered = () => {
+    const ids = filteredCleaners.map((c) => c.id);
+    if (ids.length === 0) return;
+    if (selectedSet.size === ids.length) {
+      setSelectedCleanerIds([]);
+    } else {
+      setSelectedCleanerIds(ids);
+    }
+  };
+  const handleBulkDelete = async () => {
+    if (selectedCleanerIds.length === 0) return;
+    if (
+      !window.confirm(
+        `Delete ${selectedCleanerIds.length} selected cleaner(s)? Existing timesheet entries will still reference them.`
+      )
+    ) {
+      return;
+    }
+    const token = await getGraphAccessToken();
+    if (!token) {
+      setError("Not signed in. Sign in with Microsoft to delete cleaners.");
+      return;
+    }
+    setBulkDeleteLoading(true);
+    setError(null);
+    let deleted = 0;
+    let failed = 0;
+    try {
+      for (const id of selectedCleanerIds) {
+        try {
+          await deleteCleaner(token, id);
+          deleted++;
+        } catch {
+          failed++;
+        }
+      }
+      setSelectedCleanerIds([]);
+      await loadCleaners();
+      onCleanersRefresh?.();
+      if (failed > 0) {
+        showToast(`Deleted ${deleted} cleaner(s). ${failed} failed.`);
+      } else {
+        showToast(deleted === 1 ? "Cleaner deleted." : `Deleted ${deleted} cleaners.`);
+      }
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : "Bulk delete failed.";
+      setError(msg);
+    } finally {
+      setBulkDeleteLoading(false);
+    }
+  };
+
   const filteredCleaners = cleaners.filter((c) =>
     c.cleanerName.toLowerCase().includes(searchQuery.toLowerCase().trim())
   );
 
   return (
-    <div className="space-y-8 animate-fadeIn">
-      <div className="flex flex-col md:flex-row justify-between items-start md:items-end gap-4 border-b border-[#edeef0] pb-6">
-        <div>
-          <h2 className="text-3xl font-bold text-gray-900">Cleaner Team</h2>
+    <div className="space-y-6 sm:space-y-8 animate-fadeIn">
+      <div className="flex flex-col sm:flex-row sm:justify-between sm:items-end gap-4 border-b border-[#edeef0] pb-4">
+        <div className="min-w-0">
+          <h2 className="text-2xl sm:text-3xl font-bold text-gray-900">Cleaner Team</h2>
           <p className="text-gray-500 text-sm mt-1">Manage personnel, onboarding details, and banking records.</p>
         </div>
-        <div className="flex gap-2 w-full md:w-auto">
-          <div className="relative flex-1 md:w-64">
-            <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" size={16} />
-            <input
-              type="text"
-              placeholder="Search team..."
-              value={searchQuery}
-              onChange={(e) => setSearchQuery(e.target.value)}
-              className="w-full pl-10 pr-4 py-2 bg-white border border-[#edeef0] rounded-md text-sm outline-none focus:ring-1 focus:ring-gray-900 transition-all"
-            />
+        {isAdmin && (
+          <div className="flex items-center gap-2 flex-shrink-0">
+            <button
+              onClick={handleOpenBulk}
+              className="bg-white text-gray-900 border border-[#edeef0] px-4 py-2 rounded-lg text-sm font-bold hover:bg-gray-50 transition-colors flex items-center gap-2"
+            >
+              <Layers size={16} /> Bulk Add
+            </button>
+            <button
+              onClick={handleOpenAdd}
+              className="bg-gray-900 text-white px-4 py-2 rounded-lg text-sm font-bold hover:bg-gray-800 transition-colors flex items-center gap-2"
+            >
+              <Plus size={16} /> New Cleaner
+            </button>
           </div>
-          {isAdmin && (
-            <>
-              <button
-                onClick={handleOpenBulk}
-                className="bg-white text-gray-700 px-4 py-2 rounded-md text-sm font-semibold border border-[#edeef0] hover:bg-gray-50 transition-colors flex items-center gap-2"
-              >
-                <Layers size={16} /> Bulk Add
-              </button>
-              <button
-                onClick={handleOpenAdd}
-                className="bg-gray-900 text-white px-6 py-2 rounded-md text-sm font-semibold hover:bg-gray-800 transition-colors flex items-center gap-2"
-              >
-                <Plus size={18} /> New Cleaner
-              </button>
-            </>
-          )}
-        </div>
+        )}
       </div>
+
+      <div className="relative">
+        <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" size={18} />
+        <input
+          type="search"
+          placeholder="Search team…"
+          value={searchQuery}
+          onChange={(e) => setSearchQuery(e.target.value)}
+          className="w-full pl-10 pr-4 py-2.5 border border-[#edeef0] rounded-lg text-sm text-gray-900 placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-gray-900/10 focus:border-gray-400"
+          aria-label="Search cleaners"
+        />
+      </div>
+
+      {isAdmin && selectedCleanerIds.length > 0 && (
+        <div className="sticky top-12 z-20 flex flex-wrap items-center gap-2 py-2 px-3 bg-amber-50 border border-amber-200 rounded-lg shadow-sm">
+          <span className="text-sm font-medium text-amber-800">
+            {selectedCleanerIds.length} selected
+          </span>
+          <button
+            type="button"
+            onClick={handleBulkDelete}
+            disabled={bulkDeleteLoading}
+            className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold bg-red-600 text-white hover:bg-red-700 disabled:opacity-50"
+          >
+            {bulkDeleteLoading ? <Loader2 className="animate-spin" size={14} /> : <Trash2 size={14} />}
+            Delete selected
+          </button>
+          <button
+            type="button"
+            onClick={() => setSelectedCleanerIds([])}
+            className="text-xs font-medium text-amber-800 hover:text-amber-900"
+          >
+            Clear selection
+          </button>
+        </div>
+      )}
 
       {toast && (
         <div className="bg-green-50 border border-green-200 text-green-800 px-4 py-2 rounded-lg text-sm">
@@ -370,18 +454,40 @@ const CleanerManager: React.FC<CleanerManagerProps> = ({ onCleanersRefresh }) =>
           {searchQuery.trim() ? "No cleaners match your search." : "No cleaners yet. Add one to get started."}
         </div>
       ) : (
-        <div className="border border-[#edeef0] rounded-lg overflow-hidden bg-white">
-          <table className="w-full text-left">
+        <div className="border border-[#edeef0] rounded-lg bg-white shadow-sm overflow-hidden table-scroll-mobile">
+          <table className="w-full border-collapse text-left table-fixed min-w-[700px]">
+            <colgroup>
+              {isAdmin && <col style={{ width: '4%' }} />}
+              <col style={{ width: isAdmin ? '5%' : '6%' }} />
+              <col style={{ width: isAdmin ? '22%' : '26%' }} />
+              <col style={{ width: '8%' }} />
+              <col style={{ width: '8%' }} />
+              <col style={{ width: isAdmin ? '22%' : '26%' }} />
+              <col style={{ width: '8%' }} />
+              <col style={{ width: '11%' }} />
+              {isAdmin && <col style={{ width: '12%' }} />}
+            </colgroup>
             <thead>
-              <tr className="bg-gray-50 border-b border-[#edeef0] text-[10px] font-bold text-gray-500 uppercase tracking-widest">
-                <th className="py-3 px-4 w-12"></th>
-                <th className="py-3 px-4">Name</th>
-                <th className="py-3 px-4 w-20">Status</th>
-                <th className="py-3 px-4 w-24">Rate</th>
-                <th className="py-3 px-4">Account name</th>
-                <th className="py-3 px-4 w-24">BSB</th>
-                <th className="py-3 px-4 w-28">Account no.</th>
-                {isAdmin && <th className="py-3 px-4 w-20 text-right">Actions</th>}
+              <tr className="bg-[#fcfcfb] border-b border-[#edeef0]">
+                {isAdmin && (
+                  <th className="px-1.5 py-1.5 w-10">
+                    <input
+                      type="checkbox"
+                      checked={filteredCleaners.length > 0 && selectedSet.size === filteredCleaners.length}
+                      onChange={selectAllFiltered}
+                      className="rounded border-gray-300"
+                      aria-label="Select all"
+                    />
+                  </th>
+                )}
+                <th className="px-1.5 py-1.5 w-12"></th>
+                <th className="px-1.5 py-1.5 text-[9px] font-bold text-gray-500 uppercase tracking-widest">Name</th>
+                <th className="px-1.5 py-1.5 text-[9px] font-bold text-gray-500 uppercase tracking-widest">Status</th>
+                <th className="px-1.5 py-1.5 text-[9px] font-bold text-gray-500 uppercase tracking-widest">Rate</th>
+                <th className="px-1.5 py-1.5 text-[9px] font-bold text-gray-500 uppercase tracking-widest">Account name</th>
+                <th className="px-1.5 py-1.5 text-[9px] font-bold text-gray-500 uppercase tracking-widest">BSB</th>
+                <th className="px-1.5 py-1.5 text-[9px] font-bold text-gray-500 uppercase tracking-widest">Account no.</th>
+                {isAdmin && <th className="px-1.5 py-1.5 text-[9px] font-bold text-gray-500 uppercase tracking-widest text-right">Actions</th>}
               </tr>
             </thead>
             <tbody>
@@ -390,60 +496,74 @@ const CleanerManager: React.FC<CleanerManagerProps> = ({ onCleanersRefresh }) =>
                 return (
                   <tr
                     key={cleaner.id}
-                    className="border-b border-[#edeef0] last:border-b-0 hover:bg-gray-50/80 transition-colors"
+                    className="border-b border-[#edeef0] last:border-b-0 hover:bg-[#f7f6f3] transition-colors"
                   >
-                    <td className="py-2.5 px-4">
-                      <div className="w-9 h-9 bg-gray-100 rounded-lg flex items-center justify-center text-gray-600 font-bold text-sm">
+                    {isAdmin && (
+                      <td className="px-1.5 py-1.5">
+                        <input
+                          type="checkbox"
+                          checked={selectedSet.has(cleaner.id)}
+                          onChange={() => toggleSelected(cleaner.id)}
+                          className="rounded border-gray-300"
+                          aria-label={`Select ${cleaner.cleanerName}`}
+                        />
+                      </td>
+                    )}
+                    <td className="px-1.5 py-1.5">
+                      <div className="w-8 h-8 bg-gray-100 rounded-lg flex items-center justify-center text-gray-600 font-bold text-[11px]">
                         {appCleaner.firstName.charAt(0)}
                         {appCleaner.lastName ? appCleaner.lastName.charAt(0) : ""}
                       </div>
                     </td>
-                    <td className="py-2.5 px-4">
-                      <span className="font-semibold text-gray-900">{cleaner.cleanerName}</span>
+                    <td className="px-1.5 py-1.5">
+                      <span className="text-xs font-semibold text-gray-900 break-words">{cleaner.cleanerName}</span>
                     </td>
-                    <td className="py-2.5 px-4">
-                      <span className={`text-[11px] font-bold uppercase ${cleaner.active ? "text-green-600" : "text-gray-400"}`}>
+                    <td className="px-1.5 py-1.5">
+                      <span className={`text-[10px] font-bold uppercase ${cleaner.active ? "text-green-600" : "text-gray-400"}`}>
                         {cleaner.active ? "Active" : "Inactive"}
                       </span>
                     </td>
-                    <td className="py-2.5 px-4">
-                      <span className="text-sm font-semibold text-green-600">${cleaner.payRatePerHour || 0}/hr</span>
+                    <td className="px-1.5 py-1.5">
+                      <span className="text-[11px] font-semibold text-green-600">${cleaner.payRatePerHour || 0}/hr</span>
                     </td>
-                    <td className="py-2.5 px-4 text-sm text-gray-600 truncate max-w-[160px]" title={cleaner.accountName || undefined}>
+                    <td className="px-1.5 py-1.5 text-[11px] text-gray-600 break-words" title={cleaner.accountName || undefined}>
                       {cleaner.accountName || "—"}
                     </td>
-                    <td className="py-2.5 px-4 text-sm text-gray-600 font-mono">
+                    <td className="px-1.5 py-1.5 text-[11px] text-gray-600 font-mono">
                       {cleaner.bsb || "—"}
                     </td>
-                    <td className="py-2.5 px-4 text-sm text-gray-600 font-mono">
+                    <td className="px-1.5 py-1.5 text-[11px] text-gray-600 font-mono">
                       {cleaner.accountNumber || "—"}
                     </td>
                     {isAdmin && (
-                      <td className="py-2.5 px-4 text-right">
-                        <div className="flex justify-end gap-2">
-                          <button
-                            type="button"
-                            onClick={() => handleToggleActive(cleaner)}
-                            className="inline-flex items-center gap-1 px-2 py-1 text-xs font-medium rounded-md border border-[#edeef0] bg-white hover:bg-gray-50"
-                            aria-label={cleaner.active ? `Deactivate ${cleaner.cleanerName}` : `Activate ${cleaner.cleanerName}`}
-                          >
-                            {cleaner.active ? "Deactivate" : "Activate"}
-                          </button>
+                      <td className="px-1.5 py-1.5 text-right">
+                        <div className="flex justify-end gap-1 flex-wrap">
                           <button
                             type="button"
                             onClick={() => handleOpenEdit(cleaner)}
-                            className="inline-flex items-center gap-1 px-2 py-1 text-xs font-medium text-gray-700 bg-white border border-[#edeef0] rounded-md hover:bg-gray-50 hover:border-gray-300 transition-colors"
+                            className="touch-target p-2.5 sm:p-1.5 rounded text-blue-600 hover:text-blue-800 hover:bg-blue-50 inline-flex items-center justify-center"
                             aria-label={`Edit ${cleaner.cleanerName}`}
+                            title="Edit"
                           >
-                            <Pencil size={14} />
+                            <Pencil size={18} className="sm:w-3.5 sm:h-3.5 w-[18px] h-[18px]" />
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => handleToggleActive(cleaner)}
+                            className="touch-target p-2.5 sm:p-1.5 rounded text-gray-600 hover:text-gray-900 hover:bg-gray-100 inline-flex items-center justify-center"
+                            aria-label={cleaner.active ? `Deactivate ${cleaner.cleanerName}` : `Activate ${cleaner.cleanerName}`}
+                            title={cleaner.active ? "Deactivate" : "Activate"}
+                          >
+                            {cleaner.active ? <UserMinus size={18} className="sm:w-3.5 sm:h-3.5 w-[18px] h-[18px]" /> : <UserPlus size={18} className="sm:w-3.5 sm:h-3.5 w-[18px] h-[18px]" />}
                           </button>
                           <button
                             type="button"
                             onClick={() => handleDeleteCleaner(cleaner)}
-                            className="inline-flex items-center gap-1 px-2 py-1 text-xs font-medium text-red-600 bg-white border border-red-100 rounded-md hover:bg-red-50 hover:border-red-300 transition-colors"
+                            className="touch-target p-2.5 sm:p-1.5 rounded text-red-600 hover:text-red-800 hover:bg-red-50 inline-flex items-center justify-center"
                             aria-label={`Delete ${cleaner.cleanerName}`}
+                            title="Delete"
                           >
-                            <Trash2 size={14} />
+                            <Trash2 size={18} className="sm:w-3.5 sm:h-3.5 w-[18px] h-[18px]" />
                           </button>
                         </div>
                       </td>

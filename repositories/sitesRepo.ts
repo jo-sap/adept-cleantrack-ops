@@ -13,6 +13,7 @@ export type SiteBudgetForApp = {
   friday: number;
   saturday: number;
   visitFrequency?: string;
+  budgetLabourRate?: number;
 };
 
 /** Display name -> internal name. Cached in-memory. */
@@ -78,7 +79,7 @@ function itemToSite(item: sharepoint.GraphListItem, map: Record<string, string>)
   const activeKey = map["Active"] ?? "Active";
   const monthlyKey = map["Monthly Revenue"] ?? "Monthly Revenue";
   return {
-    id: item.id,
+    id: sharepoint.normalizeListItemId(item.id),
     siteName,
     address: getString(fields, addressKey, "Address"),
     state: getString(fields, stateKey, "State"),
@@ -227,6 +228,7 @@ export function toAppSite(
   financial_budget: number;
   cleaner_rates: Record<string, number>;
   visit_frequency?: string;
+  budget_labour_rate?: number;
 } {
   const fortnightHours = budget ? budget.fortnightCap : 0;
   const dailyBudgets = budget
@@ -244,5 +246,6 @@ export function toAppSite(
     financial_budget: 0,
     cleaner_rates: {},
     ...(budget?.visitFrequency && { visit_frequency: budget.visitFrequency }),
+    ...(budget?.budgetLabourRate != null && budget.budgetLabourRate > 0 && { budget_labour_rate: budget.budgetLabourRate }),
   };
 }

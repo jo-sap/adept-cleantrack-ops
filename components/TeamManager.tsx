@@ -111,10 +111,10 @@ const TeamManager: React.FC = () => {
   }
 
   return (
-    <div className="space-y-8 p-4 md:p-6 animate-fadeIn">
-      <div className="flex flex-col md:flex-row justify-between items-start md:items-end gap-4 border-b border-[#edeef0] pb-4">
-        <div>
-          <h2 className="text-3xl font-bold text-gray-900">Team</h2>
+    <div className="space-y-6 sm:space-y-8 animate-fadeIn">
+      <div className="flex flex-col sm:flex-row sm:justify-between sm:items-end gap-4 border-b border-[#edeef0] pb-4">
+        <div className="min-w-0">
+          <h2 className="text-2xl sm:text-3xl font-bold text-gray-900">Team</h2>
           <p className="text-gray-500 text-sm mt-1">
             Manage Admin and Manager profiles used across Sites, Timesheets, and permissions.
           </p>
@@ -127,7 +127,7 @@ const TeamManager: React.FC = () => {
         </div>
       )}
 
-      <div className="bg-white border border-[#edeef0] rounded-xl shadow-sm p-4 space-y-3 max-w-3xl">
+      <div className="bg-white border border-[#edeef0] rounded-lg shadow-sm p-4 space-y-3 max-w-3xl">
         <div className="flex items-center gap-2 mb-1">
           <UserPlus size={16} className="text-gray-700" />
           <p className="text-xs font-bold text-gray-500 uppercase tracking-widest">
@@ -215,20 +215,26 @@ const TeamManager: React.FC = () => {
         )}
       </div>
 
-      <div className="border border-[#edeef0] rounded-xl bg-white shadow-sm overflow-hidden">
-        <table className="w-full text-left">
-          <thead className="bg-gray-50 border-b border-[#edeef0]">
-            <tr className="text-[10px] font-bold text-gray-500 uppercase tracking-widest">
-              <th className="py-2.5 px-3">Name</th>
-              <th className="py-2.5 px-3">Email</th>
-              <th className="py-2.5 px-3 w-24">Role</th>
-              <th className="py-2.5 px-3 w-24">Active</th>
+      <div className="border border-[#edeef0] rounded-lg bg-white shadow-sm overflow-hidden">
+        <table className="w-full border-collapse text-left table-fixed">
+          <colgroup>
+            <col style={{ width: '28%' }} />
+            <col style={{ width: '32%' }} />
+            <col style={{ width: '20%' }} />
+            <col style={{ width: '20%' }} />
+          </colgroup>
+          <thead className="bg-[#fcfcfb] border-b border-[#edeef0]">
+            <tr className="text-[9px] font-bold text-gray-500 uppercase tracking-widest">
+              <th className="py-1.5 px-1.5">Name</th>
+              <th className="py-1.5 px-1.5">Email</th>
+              <th className="py-1.5 px-1.5">Role</th>
+              <th className="py-1.5 px-1.5">Active</th>
             </tr>
           </thead>
           <tbody>
             {loading ? (
               <tr>
-                <td colSpan={4} className="py-6 px-3 text-sm text-gray-500">
+                <td colSpan={4} className="py-6 px-1.5 text-[11px] text-gray-500">
                   <div className="flex items-center gap-2">
                     <Loader2 className="animate-spin" size={16} /> Loading team…
                   </div>
@@ -236,16 +242,16 @@ const TeamManager: React.FC = () => {
               </tr>
             ) : rows.length === 0 ? (
               <tr>
-                <td colSpan={4} className="py-6 px-3 text-sm text-gray-500">
+                <td colSpan={4} className="py-6 px-1.5 text-[11px] text-gray-500">
                   No team members yet. Add a profile above.
                 </td>
               </tr>
             ) : (
               rows.map((row) => (
-                <tr key={row.id} className="border-b border-[#edeef0] last:border-b-0">
-                  <td className="py-2.5 px-3 text-sm text-gray-900">{row.fullName}</td>
-                  <td className="py-2.5 px-3 text-sm text-gray-700">{row.email}</td>
-                  <td className="py-2.5 px-3">
+                <tr key={row.id} className="border-b border-[#edeef0] last:border-b-0 hover:bg-[#f7f6f3] transition-colors">
+                  <td className="py-1.5 px-1.5 text-[11px] text-gray-900">{row.fullName}</td>
+                  <td className="py-1.5 px-1.5 text-[11px] text-gray-700 break-words">{row.email}</td>
+                  <td className="py-1.5 px-1.5">
                     <select
                       value={row.role}
                       onChange={(e) =>
@@ -256,15 +262,15 @@ const TeamManager: React.FC = () => {
                           active: row.active,
                         })
                       }
-                      className="border border-[#edeef0] rounded-lg px-2 py-1 text-xs"
+                      className="border border-[#edeef0] rounded-lg px-2 py-1 text-[11px]"
                       disabled={formLoading}
                     >
                       <option value="Manager">Manager</option>
                       <option value="Admin">Admin</option>
                     </select>
                   </td>
-                  <td className="py-2.5 px-3">
-                    <label className="inline-flex items-center gap-1 text-xs text-gray-700">
+                  <td className="py-1.5 px-1.5">
+                    <label className="inline-flex items-center gap-1 text-[11px] text-gray-700">
                       <input
                         type="checkbox"
                         checked={row.active}

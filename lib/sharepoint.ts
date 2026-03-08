@@ -99,6 +99,26 @@ export async function getListIdByName(
   return found?.id ?? null;
 }
 
+/** Get the site's User Information List id (for Person columns). Uses $filter so hidden list is found. */
+export async function getSiteUserInformationListId(
+  accessToken: string,
+  siteId: string
+): Promise<string | null> {
+  const names = ["User Information List", "Users", "UserInfo"];
+  for (const displayName of names) {
+    const encoded = encodeURIComponent(`displayName eq '${displayName.replace(/'/g, "''")}'`);
+    const url = `${GRAPH_BASE}/sites/${siteId}/lists?$filter=${encoded}`;
+    try {
+      const data = await graphFetch<GraphListsResponse>(accessToken, url);
+      const list = data.value?.[0];
+      if (list?.id) return list.id;
+    } catch {
+      // try next name
+    }
+  }
+  return getListIdByName(accessToken, siteId, "User Information List");
+}
+
 export interface GraphListColumn {
   name: string;
   displayName: string;
@@ -120,22 +140,105 @@ export async function getListColumns(
   return value.map((c) => ({ name: c.name ?? "", displayName: c.displayName ?? "" }));
 }
 
+/** Full column definition including type (lookup vs personOrGroup). Used to detect Manager column type. */
+export interface GraphColumnDefinition {
+  name: string;
+  displayName: string;
+  lookup?: unknown;
+  personOrGroup?: unknown;
+}
+
+interface GraphColumnDefinitionsResponse {
+  value?: GraphColumnDefinition[];
+}
+
+/** Get list column definitions including type (lookup / personOrGroup) so we can set Manager correctly. */
+export async function getListColumnDefinitions(
+  accessToken: string,
+  siteId: string,
+  listId: string
+): Promise<GraphColumnDefinition[]> {
+  const url = `${GRAPH_BASE}/sites/${siteId}/lists/${listId}/columns`;
+  const data = await graphFetch<GraphColumnDefinitionsResponse>(accessToken, url);
+  const value = data.value ?? [];
+  return value.map((c) => ({
+    name: c.name ?? "",
+    displayName: c.displayName ?? "",
+    lookup: c.lookup,
+    personOrGroup: c.personOrGroup,
+  }));
+}
+
+/** Get the site's User Information List lookup id for a user by email (for Person/Group columns). Returns null if not found. */
+export async function getSiteUserLookupIdByEmail(
+  accessToken: string,
+  siteId: string,
+  email: string
+): Promise<string | null> {
+  const listId = await getSiteUserInformationListId(accessToken, siteId);
+  if (!listId) return null;
+  const needle = email.trim().toLowerCase();
+  if (!needle) return null;
+  const tryFilter = async (fieldName: string): Promise<GraphListItem[]> => {
+    try {
+      const filter = `fields/${fieldName} eq '${needle.replace(/'/g, "''")}'`;
+      return await getListItemsByFilter(accessToken, siteId, listId, filter);
+    } catch {
+      return [];
+    }
+  };
+  for (const fieldName of ["EMail", "Email", "email"]) {
+    const items = await tryFilter(fieldName);
+    const match = items.find((item) => {
+      const e = (item.fields?.EMail ?? item.fields?.Email ?? item.fields?.email) as string | undefined;
+      return e && String(e).trim().toLowerCase() === needle;
+    });
+    if (match?.id) return normalizeListItemId(match.id);
+    if (items.length > 0 && items[0].id) return normalizeListItemId(items[0].id);
+  }
+  try {
+    const all = await getListItems(accessToken, siteId, listId);
+    const match = all.find((item) => {
+      const e = (item.fields?.EMail ?? item.fields?.Email ?? item.fields?.email) as string | undefined;
+      return e && String(e).trim().toLowerCase() === needle;
+    });
+    if (match?.id) return normalizeListItemId(match.id);
+  } catch {
+    // ignore
+  }
+  return null;
+}
+
 export interface GraphListItem {
   id: string;
   fields?: Record<string, unknown>;
+}
+
+/** Normalize list item id for consistent join (Graph may return "5" or path-style). */
+export function normalizeListItemId(id: string): string {
+  const s = String(id ?? "").trim();
+  if (!s) return s;
+  const parts = s.split("/");
+  const last = parts[parts.length - 1];
+  return last ?? s;
 }
 
 export interface GraphListItemsResponse {
   value?: GraphListItem[];
 }
 
-/** Get list items with fields expanded. */
+/** Get list items with fields expanded. Optionally request specific fields (e.g. for lookup columns). */
 export async function getListItems(
   accessToken: string,
   siteId: string,
-  listId: string
+  listId: string,
+  fieldsSelect?: string[]
 ): Promise<GraphListItem[]> {
-  const url = `${GRAPH_BASE}/sites/${siteId}/lists/${listId}/items?expand=fields`;
+  let url = `${GRAPH_BASE}/sites/${siteId}/lists/${listId}/items?expand=fields`;
+  if (fieldsSelect && fieldsSelect.length > 0) {
+    const select = fieldsSelect.join(",");
+    url += `($select=${select})`;
+  }
   const data = await graphFetch<GraphListItemsResponse>(accessToken, url);
   const value = data.value ?? [];
   return value.map((item) => ({

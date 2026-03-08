@@ -3,6 +3,7 @@ import * as sharepoint from "../lib/sharepoint";
 const CLEANTRACK_USERS_LIST_NAME = "CleanTrack Users";
 
 export interface CleanTrackUser {
+  id: string;
   fullName: string;
   email: string;
   role: string;
@@ -44,6 +45,7 @@ export async function getCleanTrackUserByEmail(
   if (!row?.fields) return null;
   const fields = row.fields;
   return {
+    id: String(row.id),
     fullName: String(fields.Title ?? ""),
     email: String(fields.Email ?? ""),
     role: normalizeRole(fields.Role),
@@ -52,8 +54,9 @@ export async function getCleanTrackUserByEmail(
   };
 }
 
-/** Manager summary for assignment UI. */
+/** Manager summary for assignment UI (includes CleanTrack Users list item id for lookup). */
 export interface ManagerOption {
+  id: string;
   fullName: string;
   email: string;
 }
@@ -74,7 +77,7 @@ export async function getCleanTrackManagers(
     if (role !== "Manager") continue;
     const fullName = String(fields.Title ?? "").trim();
     const email = String(fields.Email ?? "").trim();
-    if (email) result.push({ fullName: fullName || email, email });
+    if (email && item.id) result.push({ id: String(item.id), fullName: fullName || email, email });
   }
   return result;
 }
@@ -112,6 +115,19 @@ export async function getCleanTrackUsers(
     });
   }
   return result;
+}
+
+/** Get a map of CleanTrack Users list item id (normalized) -> full name. Used to display manager names from the source of truth. */
+export async function getCleanTrackUserIdToNameMap(
+  accessToken: string
+): Promise<Record<string, string>> {
+  const users = await getCleanTrackUsers(accessToken);
+  const map: Record<string, string> = {};
+  for (const u of users) {
+    const norm = sharepoint.normalizeListItemId(u.id);
+    if (norm && (u.fullName || u.email)) map[norm] = u.fullName || u.email;
+  }
+  return map;
 }
 
 export interface ManagerUpsertPayload {

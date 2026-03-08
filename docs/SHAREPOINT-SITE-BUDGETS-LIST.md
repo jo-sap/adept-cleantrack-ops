@@ -15,6 +15,7 @@ Order columns in the list like this. Grouping makes it easy to scan and to build
 | 3     | Active                     | Yes/No     | Always            |
 | 4     | **Visit Frequency**        | **Choice** | Always            |
 | 5     | **Hours per Visit**         | **Number** | Monthly only      |
+| 5a    | **Budget Labour Rate**    | **Number** | Optional; hourly rate ($/hr) for budgeted labour, used for dashboard labour and margin |
 | 6     | Monday Hours               | Number     | Weekly / Fortnightly (Week 1) |
 | 7     | Tuesday Hours              | Number     | "                 |
 | 8     | Wednesday Hours            | Number     | "                 |
@@ -48,7 +49,7 @@ Default can be **Weekly**.
 
 ## 3. Number columns
 
-- **Hours per Visit**, and all **Hours** columns: use **Number** with 2 decimal places (or more if you need it).
+- **Hours per Visit**, **Budget Labour Rate**, and all **Hours** columns: use **Number** with 2 decimal places (or more if you need it).
 - Allow zero; no need to require a value (the app will write 0 when not used).
 
 ---

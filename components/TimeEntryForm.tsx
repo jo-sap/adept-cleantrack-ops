@@ -4,11 +4,11 @@ import { Site, Cleaner, TimeEntry, FortnightPeriod } from '../types';
 import { format, getDay, addDays } from 'date-fns';
 import { useRole } from '../contexts/RoleContext';
 import { getDayStatus } from '../utils';
-import { 
-  Save, Zap, Building, ArrowLeft, UserPlus, TrendingUp, TrendingDown, Check, Download, FileSpreadsheet, History
-} from 'lucide-react';
+import { Save, Zap, Building, ArrowLeft, UserPlus, TrendingUp, TrendingDown, Check, Download, FileSpreadsheet, History, Search, Loader2 } from 'lucide-react';
 import { exportFortnightTimesheets } from '../services/exportService';
 import { supabase } from '../lib/supabase';
+import { getGraphAccessToken } from '../lib/graph';
+import { getAdHocJobs } from '../repositories/adHocJobsRepo';
 
 interface TimeEntryFormProps {
   sites: Site[];
@@ -30,12 +30,25 @@ const TimeEntryForm: React.FC<TimeEntryFormProps> = ({
   const [isSaved, setIsSaved] = useState(false);
   const [hasUnsavedChanges, setHasUnsavedChanges] = useState(false);
   const [auditInfo, setAuditInfo] = useState<{name: string, time: string} | null>(null);
-  const [cleanerSearch, setCleanerSearch] = useState('');
+  const [siteSearchQuery, setSiteSearchQuery] = useState('');
+  const [saveLoading, setSaveLoading] = useState(false);
+  const [adhocJobId, setAdhocJobId] = useState<string | null>(null);
+  const [adHocJobsForSite, setAdHocJobsForSite] = useState<{ id: string; jobName: string }[]>([]);
   
   const inputRefs = useRef<Record<string, HTMLInputElement | null>>({});
 
   const activeSite = sites.find(s => s.id === activeSiteId);
   const activeCleaner = cleaners.find(c => c.id === selectedCleanerId);
+
+  const filteredSites = useMemo(() => {
+    const q = siteSearchQuery.trim().toLowerCase();
+    if (!q) return sites;
+    return sites.filter(
+      s =>
+        (s.name?.toLowerCase().includes(q) ?? false) ||
+        (s.address?.toLowerCase().includes(q) ?? false)
+    );
+  }, [sites, siteSearchQuery]);
 
   const dates = useMemo(() => {
     const list = [];
@@ -75,10 +88,32 @@ const TimeEntryForm: React.FC<TimeEntryFormProps> = ({
         newDraft[dateStr] = existing ? existing.hours : 0;
       });
       setDraftHours(newDraft);
+      const firstEntry = entries.find(e => e.siteId === activeSiteId && e.cleanerId === selectedCleanerId);
+      setAdhocJobId(firstEntry?.adhocJobId ?? null);
       setHasUnsavedChanges(false);
       fetchAuditTrail();
     }
-  }, [activeSiteId, selectedCleanerId, currentPeriod.id]);
+  }, [activeSiteId, selectedCleanerId, currentPeriod.id, entries]);
+
+  useEffect(() => {
+    if (!activeSiteId) {
+      setAdHocJobsForSite([]);
+      return;
+    }
+    let cancelled = false;
+    getGraphAccessToken().then(async (token) => {
+      if (!token || cancelled) return;
+      try {
+        const list = await getAdHocJobs(token, { siteId: activeSiteId });
+        if (!cancelled) {
+          setAdHocJobsForSite(list.filter(j => j.active).map(j => ({ id: j.id, jobName: j.jobName || "Unnamed job" })));
+        }
+      } catch {
+        if (!cancelled) setAdHocJobsForSite([]);
+      }
+    });
+    return () => { cancelled = true; };
+  }, [activeSiteId]);
 
   const fetchAuditTrail = async () => {
     const { data } = await supabase.from('timesheet_batches').select('updated_at, profiles(full_name)')
@@ -99,18 +134,24 @@ const TimeEntryForm: React.FC<TimeEntryFormProps> = ({
 
   const handleSave = async () => {
     if (!activeSiteId || !selectedCleanerId || !activeCleaner || !activeSite) return;
-    const batchData = (Object.entries(draftHours) as [string, number][]).map(([date, hours]) => ({
-      siteId: activeSiteId,
-      cleanerId: selectedCleanerId,
-      date,
-      hours,
-      pay_rate_snapshot: activeSite.cleaner_rates[selectedCleanerId] || activeCleaner.payRatePerHour || 0
-    }));
-    await onSaveBatch(batchData as any);
-    setHasUnsavedChanges(false);
-    setIsSaved(true);
-    fetchAuditTrail();
-    setTimeout(() => setIsSaved(false), 2000);
+    setSaveLoading(true);
+    try {
+      const batchData = (Object.entries(draftHours) as [string, number][]).map(([date, hours]) => ({
+        siteId: activeSiteId,
+        cleanerId: selectedCleanerId,
+        date,
+        hours,
+        pay_rate_snapshot: activeSite.cleaner_rates[selectedCleanerId] || activeCleaner.payRatePerHour || 0,
+        adhocJobId: adhocJobId || undefined
+      }));
+      await onSaveBatch(batchData as any);
+      setHasUnsavedChanges(false);
+      setIsSaved(true);
+      await fetchAuditTrail();
+      setTimeout(() => setIsSaved(false), 2000);
+    } finally {
+      setSaveLoading(false);
+    }
   };
 
   const handleAutoFill = () => {
@@ -236,18 +277,12 @@ const TimeEntryForm: React.FC<TimeEntryFormProps> = ({
           if (personnelIds.length === 0) {
             return <div className="py-2"><p className="text-xs text-gray-400">No cleaners in team. Add cleaners in Cleaner Team first.</p></div>;
           }
-          const filter = cleanerSearch.trim().toLowerCase();
           const options = personnelIds
             .map(cid => cleaners.find(c => c.id === cid))
-            .filter((c): c is Cleaner => !!c)
-            .filter(c => {
-              if (!filter) return true;
-              const name = `${c.firstName} ${c.lastName}`.toLowerCase();
-              return name.includes(filter);
-            });
+            .filter((c): c is Cleaner => !!c);
           return (
             <div className="flex flex-col md:flex-row md:items-end gap-3 border-b border-[#edeef0] pt-2 pb-2">
-              <div className="flex-1">
+              <div className="flex-1 max-w-xs">
                 <label className="block text-[10px] font-bold text-gray-400 uppercase mb-1">
                   Personnel
                 </label>
@@ -266,15 +301,18 @@ const TimeEntryForm: React.FC<TimeEntryFormProps> = ({
               </div>
               <div className="flex-1 max-w-xs">
                 <label className="block text-[10px] font-bold text-gray-400 uppercase mb-1">
-                  Search team
+                  Ad Hoc Job <span className="text-gray-400 font-normal">(optional)</span>
                 </label>
-                <input
-                  type="text"
-                  value={cleanerSearch}
-                  onChange={(e) => setCleanerSearch(e.target.value)}
-                  placeholder="Type name to filter…"
+                <select
+                  value={adhocJobId ?? ""}
+                  onChange={(e) => { setAdhocJobId(e.target.value || null); setHasUnsavedChanges(true); }}
                   className="w-full border border-[#edeef0] rounded-lg px-3 py-2 text-sm"
-                />
+                >
+                  <option value="">None – recurring work</option>
+                  {adHocJobsForSite.map(j => (
+                    <option key={j.id} value={j.id}>{j.jobName}</option>
+                  ))}
+                </select>
               </div>
             </div>
           );
@@ -297,8 +335,9 @@ const TimeEntryForm: React.FC<TimeEntryFormProps> = ({
                 <button type="button" onClick={handleAutoFill} className="flex flex-col items-center justify-center w-24 h-14 rounded-xl border border-[#edeef0] bg-white text-gray-700 hover:bg-gray-50 hover:border-gray-300 transition-all" title="Fill missing hours with planned values">
                   <Zap size={12} className="opacity-70 mb-0.5" /><span className="text-[10px] font-bold uppercase">Auto fill</span>
                 </button>
-                <button onClick={handleSave} disabled={!hasUnsavedChanges} className={`flex flex-col items-center justify-center w-24 h-14 rounded-xl transition-all ${isSaved ? 'bg-green-600 text-white' : 'bg-gray-900 text-white hover:bg-black disabled:opacity-40'}`}>
-                   <Save size={12} className="opacity-70 mb-0.5" /><span className="text-[10px] font-bold uppercase">Save Batch</span>
+                <button onClick={handleSave} disabled={!hasUnsavedChanges || saveLoading} className={`flex flex-col items-center justify-center w-24 h-14 rounded-xl transition-all ${isSaved ? 'bg-green-600 text-white' : 'bg-gray-900 text-white hover:bg-black disabled:opacity-40'}`}>
+                  {saveLoading ? <Loader2 size={18} className="animate-spin mb-0.5" /> : <Save size={12} className="opacity-70 mb-0.5" />}
+                  <span className="text-[10px] font-bold uppercase">{saveLoading ? 'Saving…' : 'Save Batch'}</span>
                 </button>
               </div>
             </div>
@@ -350,16 +389,30 @@ const TimeEntryForm: React.FC<TimeEntryFormProps> = ({
   }
 
   return (
-    <div className="space-y-10">
-      <div className="flex items-center justify-between px-2">
-        <h3 className="text-lg font-bold text-gray-900">Portfolio Audit Board</h3>
-        <div className="flex gap-2">
-          <button onClick={() => exportFortnightTimesheets(currentPeriod, sites, cleaners, entries as any, 'xlsx')} className="flex items-center gap-1.5 px-4 py-1.5 bg-green-50 text-green-700 border border-green-200 rounded-lg text-xs font-bold">Export (XLSX)</button>
+    <div className="space-y-6 sm:space-y-8">
+      <div className="flex flex-col sm:flex-row sm:justify-between sm:items-end gap-4 border-b border-[#edeef0] pb-4">
+        <div className="min-w-0">
+          <h3 className="text-2xl sm:text-3xl font-bold text-gray-900">Timesheets</h3>
+          <p className="text-gray-500 text-sm mt-1">Portfolio audit board — enter and review hours by site and cleaner.</p>
+        </div>
+        <div className="flex gap-2 flex-shrink-0">
+          <button onClick={() => exportFortnightTimesheets(currentPeriod, sites, cleaners, entries as any, 'xlsx')} className="flex items-center gap-1.5 px-4 py-2 bg-green-50 text-green-700 border border-green-200 rounded-lg text-xs font-bold hover:bg-green-100 transition-colors">Export (XLSX)</button>
         </div>
       </div>
+      <div className="relative">
+        <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" size={18} />
+        <input
+          type="search"
+          placeholder="Search sites by name or address…"
+          value={siteSearchQuery}
+          onChange={(e) => setSiteSearchQuery(e.target.value)}
+          className="w-full pl-10 pr-4 py-2.5 border border-[#edeef0] rounded-lg text-sm text-gray-900 placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-gray-900/10 focus:border-gray-400"
+          aria-label="Search sites"
+        />
+      </div>
       <div className="space-y-3">
-        {sites.map(site => (
-          <div key={site.id} onClick={() => setActiveSiteId(site.id)} className="group bg-white border border-[#edeef0] hover:border-gray-900 rounded-xl p-4 cursor-pointer flex items-center justify-between">
+        {filteredSites.map(site => (
+          <div key={site.id} onClick={() => setActiveSiteId(site.id)} className="group bg-white border border-[#edeef0] hover:border-gray-900 rounded-lg p-4 cursor-pointer flex items-center justify-between">
             <div className="flex items-center gap-4 w-1/3">
               <div className="w-10 h-10 bg-gray-50 group-hover:bg-white border border-[#edeef0] rounded-xl flex items-center justify-center text-gray-400"><Building size={20} /></div>
               <div className="min-w-0"><h4 className="text-sm font-bold text-gray-900 truncate">{site.name}</h4><p className="text-[10px] text-gray-400 truncate uppercase font-bold">{site.address}</p></div>
@@ -373,6 +426,9 @@ const TimeEntryForm: React.FC<TimeEntryFormProps> = ({
             </div>
           </div>
         ))}
+        {siteSearchQuery.trim() && filteredSites.length === 0 && (
+          <p className="text-sm text-gray-500 py-6 text-center">No sites match your search.</p>
+        )}
       </div>
     </div>
   );

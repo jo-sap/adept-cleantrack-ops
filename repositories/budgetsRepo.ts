@@ -33,6 +33,8 @@ export interface BudgetPayload {
   week2ThursdayHours?: number;
   week2FridayHours?: number;
   week2SaturdayHours?: number;
+  /** Hourly rate for budgeted labour cost (e.g. $/hr). Used for monthly budgets, labour expense estimates, profit margin. */
+  budgetLabourRate?: number;
 }
 
 async function getSiteAndListId(accessToken: string): Promise<{ siteId: string; listId: string }> {
@@ -73,6 +75,7 @@ export async function createSiteBudget(
   const w2FriKey = map["Week 2 Friday Hours"] ?? "Week2FridayHours";
   const w2SatKey = map["Week 2 Saturday Hours"] ?? "Week2SaturdayHours";
   const w2SunKey = map["Week 2 Sunday Hours"] ?? "Week2SundayHours";
+  const budgetLabourRateKey = map["Budget Labour Rate"] ?? map["BudgetLabourRate"] ?? "Budget_x0020_Labour_x0020_Rate";
 
   const nameFieldKey = budgetNameKey === "LinkTitle" ? "Title" : budgetNameKey;
   const numSiteId = parseInt(payload.siteListItemId, 10);
@@ -105,6 +108,10 @@ export async function createSiteBudget(
   if (payload.week2ThursdayHours !== undefined) fields[w2ThuKey] = payload.week2ThursdayHours;
   if (payload.week2FridayHours !== undefined) fields[w2FriKey] = payload.week2FridayHours;
   if (payload.week2SaturdayHours !== undefined) fields[w2SatKey] = payload.week2SaturdayHours;
+  if (payload.budgetLabourRate !== undefined && payload.budgetLabourRate !== null && payload.budgetLabourRate !== "") {
+    const rate = Number(payload.budgetLabourRate);
+    if (!Number.isNaN(rate)) fields[budgetLabourRateKey] = rate;
+  }
 
   await sharepoint.createListItem(accessToken, siteId, listId, fields);
 }
@@ -132,6 +139,8 @@ export interface SiteBudgetHours {
   week2Thursday?: number;
   week2Friday?: number;
   week2Saturday?: number;
+  /** Hourly rate for budgeted labour ($/hr). */
+  budgetLabourRate?: number;
 }
 
 function toNum(v: unknown): number {
@@ -195,6 +204,7 @@ export async function getSiteBudgets(
   };
   const visitFreqKeys = ["VisitFrequency", "Visit_x0020_Frequency", "Visit Frequency"];
   const hoursPerVisitKeys = ["HoursPerVisit", "Hours_x0020_per_x0020_Visit", "Hours per Visit"];
+  const budgetLabourRateKeys = ["Budget Labour Rate", "BudgetLabourRate", "Budget_x0020_Labour_x0020_Rate"];
 
   for (const item of items) {
     const f = (item.fields ?? {}) as Record<string, unknown>;
@@ -245,6 +255,7 @@ export async function getSiteBudgets(
     const visitFrequencyRaw = getFirst(visitFreqKeys);
     const visitFrequency = normalizeVisitFreq(visitFrequencyRaw);
     const hoursPerVisit = getFirstNum(hoursPerVisitKeys);
+    const budgetLabourRate = getFirstNum(budgetLabourRateKeys);
 
     let fortnightCap: number;
     if (visitFrequency === "Fortnightly" && (week2Total > 0 || weekTotal > 0)) {
@@ -271,6 +282,7 @@ export async function getSiteBudgets(
       fortnightCap,
       ...(visitFrequency && { visitFrequency }),
       ...(hoursPerVisit != null && { hoursPerVisit }),
+      ...(budgetLabourRate != null && budgetLabourRate > 0 && { budgetLabourRate }),
       ...(week2Total > 0 || sun2 || mon2 || tue2 || wed2 || thu2 || fri2 || sat2
         ? {
             week2Sunday: sun2,
@@ -319,6 +331,7 @@ export interface UpdateBudgetPayload {
   week2ThursdayHours?: number;
   week2FridayHours?: number;
   week2SaturdayHours?: number;
+  budgetLabourRate?: number;
 }
 
 /** Update an existing site budget by its list item id. */
@@ -351,6 +364,7 @@ export async function updateSiteBudget(
   const w2FriKey = map["Week 2 Friday Hours"] ?? "Week2FridayHours";
   const w2SatKey = map["Week 2 Saturday Hours"] ?? "Week2SaturdayHours";
   const w2SunKey = map["Week 2 Sunday Hours"] ?? "Week2SundayHours";
+  const budgetLabourRateKey = map["Budget Labour Rate"] ?? map["BudgetLabourRate"] ?? "Budget_x0020_Labour_x0020_Rate";
 
   const fields: Record<string, unknown> = {
     [monKey]: payload.mondayHours ?? 0,
@@ -381,6 +395,10 @@ export async function updateSiteBudget(
   if (payload.week2ThursdayHours !== undefined) fields[w2ThuKey] = payload.week2ThursdayHours;
   if (payload.week2FridayHours !== undefined) fields[w2FriKey] = payload.week2FridayHours;
   if (payload.week2SaturdayHours !== undefined) fields[w2SatKey] = payload.week2SaturdayHours;
+  if (payload.budgetLabourRate !== undefined && payload.budgetLabourRate !== null) {
+    const rate = typeof payload.budgetLabourRate === "number" ? payload.budgetLabourRate : payload.budgetLabourRate === "" ? 0 : Number(payload.budgetLabourRate);
+    if (!Number.isNaN(rate)) fields[budgetLabourRateKey] = rate;
+  }
 
   await sharepoint.updateListItem(accessToken, siteId, listId, budgetListItemId, fields);
 }

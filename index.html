@@ -12,6 +12,14 @@
       font-family: 'Inter', sans-serif;
       background-color: #f9fafb;
     }
+    html, body {
+      overflow-x: hidden;
+      -webkit-overflow-scrolling: touch;
+    }
+    #root {
+      min-height: 100vh;
+      min-height: 100dvh;
+    }
     .glass {
       background: rgba(255, 255, 255, 0.7);
       backdrop-filter: blur(10px);
@@ -23,6 +31,18 @@
     .no-scrollbar {
       -ms-overflow-style: none;
       scrollbar-width: none;
+    }
+    /* Mobile: smooth horizontal scroll for wide tables */
+    .table-scroll-mobile {
+      -webkit-overflow-scrolling: touch;
+      overflow-x: auto;
+    }
+    /* Minimum touch target for icon buttons (accessibility) */
+    @media (max-width: 1023px) {
+      .touch-target {
+        min-height: 44px;
+        min-width: 44px;
+      }
     }
   </style>
 <script type="importmap">

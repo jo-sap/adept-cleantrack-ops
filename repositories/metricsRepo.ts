@@ -202,6 +202,8 @@ export interface TimesheetEntryFlat {
   siteId: string;
   cleanerId: string;
   pay_rate_snapshot?: number;
+  adhocJobId?: string;
+  adhocJobName?: string;
 }
 
 /** Load timesheet entries from SharePoint for the given range; returns flat list for dashboard/views. */
@@ -218,6 +220,15 @@ export async function getTimesheetEntriesForRange(
     sharepoint.getListItems(accessToken, siteId, timesheetsListId),
     cleanersListId ? sharepoint.getListItems(accessToken, siteId, cleanersListId) : [],
   ]);
+
+  const timesheetColumns = await sharepoint.getListColumns(accessToken, siteId, timesheetsListId);
+  const tsMap: Record<string, string> = {};
+  for (const c of timesheetColumns) {
+    if (c.displayName) tsMap[c.displayName] = c.name;
+  }
+  const adHocJobCol = tsMap["Ad Hoc Job"] ?? "Ad_x0020_Hoc_x0020_Job";
+  const adHocJobIdKey = `${adHocJobCol}LookupId`;
+  const adHocJobNameKey = adHocJobCol;
 
   const cleanerRateMap: Record<string, number> = {};
   if (cleanerItems.length > 0) {
@@ -249,6 +260,14 @@ export async function getTimesheetEntriesForRange(
     if (!siteIdVal || !cleanerIdVal) continue;
     const rate = cleanerRateMap[cleanerIdVal] ?? 0;
     const dateStr = workDate.toISOString().slice(0, 10);
+    const adhocJobIdVal = f[adHocJobIdKey] != null ? String(f[adHocJobIdKey]).trim() : "";
+    let adhocJobNameVal = "";
+    const ahVal = f[adHocJobNameKey];
+    if (ahVal != null) {
+      if (typeof ahVal === "object" && ahVal !== null && "LookupValue" in (ahVal as object))
+        adhocJobNameVal = String((ahVal as { LookupValue?: string }).LookupValue ?? "").trim();
+      else adhocJobNameVal = String(ahVal).trim();
+    }
     result.push({
       id: item.id!,
       date: dateStr,
@@ -256,17 +275,24 @@ export async function getTimesheetEntriesForRange(
       siteId: siteIdVal,
       cleanerId: cleanerIdVal,
       pay_rate_snapshot: rate || undefined,
+      ...(adhocJobIdVal ? { adhocJobId: adhocJobIdVal, adhocJobName: adhocJobNameVal || undefined } : {}),
     });
+  }
+  if (typeof process !== "undefined" && process.env?.NODE_ENV === "development" && result.length > 0) {
+    const withAdHoc = result.filter((e) => e.adhocJobId);
+    console.log("[CleanTrack Timesheet Entries] range count:", result.length, "with Ad Hoc Job:", withAdHoc.length, "sample:", result[0]);
   }
   return result;
 }
 
-/** Payload for one timesheet row (site + cleaner + date + hours). */
+/** Payload for one timesheet row (site + cleaner + date + hours; optional ad hoc job). */
 export interface TimesheetEntryPayload {
   siteId: string;
   cleanerId: string;
   date: string;
   hours: number;
+  /** Optional CleanTrack Ad Hoc Jobs list item id (lookup). */
+  adhocJobId?: string | null;
 }
 
 /**
@@ -291,6 +317,9 @@ export async function saveTimesheetEntriesToSharePoint(
   const hoursKey = map["Hours"] ?? "Hours";
   const siteKey = map["Site"] === "Site" ? "SiteLookupId" : (map["Site"] ?? "SiteLookupId");
   const cleanerKey = map["Cleaner"] === "Cleaner" ? "CleanerLookupId" : (map["Cleaner"] ?? "CleanerLookupId");
+  const adHocJobDisplay = "Ad Hoc Job";
+  const adHocJobInternal = map[adHocJobDisplay] ?? "Ad_x0020_Hoc_x0020_Job";
+  const adHocJobKey = adHocJobInternal === "Ad Hoc Job" ? "Ad_x0020_Hoc_x0020_JobLookupId" : `${adHocJobInternal}LookupId`;
 
   const existing = await getTimesheetEntriesForRange(accessToken, range);
   const keyToId = new Map<string, string>();
@@ -305,19 +334,25 @@ export async function saveTimesheetEntriesToSharePoint(
     const siteLookupVal = /^\d+$/.test(entry.siteId) ? parseInt(entry.siteId, 10) : entry.siteId;
     const cleanerLookupVal = /^\d+$/.test(entry.cleanerId) ? parseInt(entry.cleanerId, 10) : entry.cleanerId;
     const workDate = entry.date; // yyyy-MM-dd
+    const adHocLookupVal =
+      entry.adhocJobId != null && entry.adhocJobId !== ""
+        ? (/^\d+$/.test(entry.adhocJobId) ? parseInt(entry.adhocJobId, 10) : entry.adhocJobId)
+        : null;
 
     try {
       if (existingId) {
-        await sharepoint.updateListItem(accessToken, siteId, listId, existingId, {
-          [hoursKey]: entry.hours,
-        });
+        const updateFields: Record<string, unknown> = { [hoursKey]: entry.hours };
+        if (adHocJobKey) updateFields[adHocJobKey] = adHocLookupVal;
+        await sharepoint.updateListItem(accessToken, siteId, listId, existingId, updateFields);
       } else {
-        await sharepoint.createListItem(accessToken, siteId, listId, {
+        const createFields: Record<string, unknown> = {
           [workDateKey]: workDate,
           [hoursKey]: entry.hours,
           [siteKey]: siteLookupVal,
           [cleanerKey]: cleanerLookupVal,
-        });
+        };
+        if (adHocJobKey && adHocLookupVal != null) createFields[adHocJobKey] = adHocLookupVal;
+        await sharepoint.createListItem(accessToken, siteId, listId, createFields);
       }
       saved++;
     } catch (err) {

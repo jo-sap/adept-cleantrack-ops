@@ -19,6 +19,8 @@ export interface Site {
   monthly_revenue: number;
   financial_budget: number;
   cleaner_rates: Record<string, number>;
+  /** Hourly rate for budgeted labour at this site ($/hr). From CleanTrack Site Budgets. */
+  budget_labour_rate?: number;
   managers?: Profile[]; // Joined data
   /** Weekly | Fortnightly | Monthly – from site budget */
   visit_frequency?: string;
@@ -45,6 +47,10 @@ export interface TimeEntry {
   // Joined fields for operational context
   siteId?: string;
   cleanerId?: string;
+  /** Optional link to Ad Hoc Job (CleanTrack Ad Hoc Jobs list item id). */
+  adhocJobId?: string;
+  /** Display name of linked Ad Hoc Job. */
+  adhocJobName?: string;
 }
 
 export interface TimeBatch {
@@ -60,10 +66,40 @@ export interface TimeBatch {
   entries?: TimeEntry[];
 }
 
+/** Ad Hoc Job from CleanTrack Ad Hoc Jobs list. */
+export interface AdHocJob {
+  id: string;
+  jobName: string;
+  jobType: string;
+  siteId: string | null;
+  siteName: string;
+  requestedByName: string;
+  requestedByEmail: string;
+  requestedByCompany: string;
+  requestChannel: string;
+  requestSummary: string;
+  requestedDate: string | null;
+  assignedManagerId: string | null;
+  assignedManagerName: string;
+  scheduledDate: string | null;
+  completedDate: string | null;
+  status: string;
+  budgetedHours: number | null;
+  budgetedLabourRate: number | null;
+  budgetedRevenue: number | null;
+  description: string;
+  approvalProofRequired: boolean;
+  approvalProofUploaded: boolean;
+  approvalReferenceNotes: string;
+  active: boolean;
+  /** Placeholder for future attachment support. */
+  attachmentCount?: number;
+}
+
 export interface FortnightPeriod {
   startDate: Date;
   endDate: Date;
   id: string;
 }
 
-export type ViewType = 'dashboard' | 'sites' | 'team' | 'cleaners' | 'timesheets' | 'insights' | 'site-detail' | 'auth-test';
+export type ViewType = 'dashboard' | 'sites' | 'team' | 'cleaners' | 'timesheets' | 'insights' | 'adhoc-jobs' | 'site-detail' | 'auth-test';

@@ -3,6 +3,7 @@ import React, { useState, useEffect, FC } from 'react';
 import Sidebar from './components/Sidebar';
 import Dashboard from './components/Dashboard';
 import SiteManager from './components/SiteManager';
+import AdHocJobsManager from './components/AdHocJobsManager';
 import TimeEntryForm from './components/TimeEntryForm';
 import SiteDetail from './components/SiteDetail';
 import CleanerManager from './components/CleanerManager';
@@ -13,7 +14,7 @@ import UnauthorizedScreen from './components/UnauthorizedScreen';
 import { DevBypassBanner } from './components/DevBypassBanner';
 import { Site, Cleaner, ViewType, FortnightPeriod, TimeBatch, TimeEntry } from './types';
 import { getFortnightForDate } from './utils';
-import { ChevronLeft, ChevronRight, Loader2 } from 'lucide-react';
+import { ChevronLeft, ChevronRight, Loader2, Menu } from 'lucide-react';
 import { format } from 'date-fns';
 import { RoleProvider, useRole } from './contexts/RoleContext';
 import { AppAuthProvider, useAppAuth } from './contexts/AppAuthContext';
@@ -59,6 +60,7 @@ const AppContent: FC = () => {
   const [graphEntriesLoaded, setGraphEntriesLoaded] = useState(false);
   const [currentPeriod, setCurrentPeriod] = useState<FortnightPeriod>(getFortnightForDate(new Date()));
   const [dataLoading, setDataLoading] = useState(true);
+  const [sidebarMobileOpen, setSidebarMobileOpen] = useState(false);
 
   const fetchSites = async () => {
     setDataLoading(true);
@@ -67,8 +69,11 @@ const AppContent: FC = () => {
       try {
         let list = await getSites(token);
         if (user?.role === 'Manager' && user?.email) {
-          const assignedIds = await getAssignedSiteIdsForManager(token, user.email);
-          if (assignedIds.length > 0) list = list.filter((s) => assignedIds.includes(s.id));
+          const isAllSites = user.permissionScope?.trim().toLowerCase() === 'allsites';
+          if (!isAllSites) {
+            const assignedIds = await getAssignedSiteIdsForManager(token, user.email);
+            if (assignedIds.length > 0) list = list.filter((s) => assignedIds.includes(s.id));
+          }
         }
         const budgets = await getSiteBudgets(token).catch(() => ({}));
         setSites(list.map((s) => {
@@ -119,6 +124,8 @@ const AppContent: FC = () => {
           pay_rate_snapshot: e.pay_rate_snapshot,
           siteId: e.siteId,
           cleanerId: e.cleanerId,
+          adhocJobId: e.adhocJobId,
+          adhocJobName: e.adhocJobName,
         } as TimeEntry)));
         setGraphEntriesLoaded(true);
       }).catch(() => { if (!cancelled) setGraphEntriesLoaded(false); });
@@ -196,6 +203,7 @@ const AppContent: FC = () => {
         cleanerId: (ne as any).cleanerId,
         date: ne.date,
         hours: ne.hours,
+        adhocJobId: (ne as any).adhocJobId ?? null,
       }));
       const result = await saveTimesheetEntriesToSharePoint(token, range, payload);
       if (result.error) {
@@ -211,6 +219,8 @@ const AppContent: FC = () => {
         pay_rate_snapshot: e.pay_rate_snapshot,
         siteId: e.siteId,
         cleanerId: e.cleanerId,
+        adhocJobId: e.adhocJobId,
+        adhocJobName: e.adhocJobName,
       } as TimeEntry)));
       setGraphEntriesLoaded(true);
       return;
@@ -272,6 +282,8 @@ const AppContent: FC = () => {
         return <TeamManager />;
       case 'cleaners':
         return <CleanerManager onCleanersRefresh={fetchCleaners} />;
+      case 'adhoc-jobs':
+        return <AdHocJobsManager />;
       case 'site-detail':
         const site = sites.find(s => s.id === selectedSiteId);
         if (!site) return null;
@@ -283,29 +295,44 @@ const AppContent: FC = () => {
   };
 
   return (
-    <div className="flex min-h-screen bg-white">
-      <Sidebar currentView={currentView === 'site-detail' ? 'dashboard' : currentView} onViewChange={setCurrentView} />
-      <main className="flex-1 overflow-x-hidden flex flex-col">
-        <nav className="h-12 border-b border-[#edeef0] flex items-center justify-between px-6 sticky top-0 bg-white/80 backdrop-blur-md z-30">
-          <div className="flex items-center gap-2 text-sm text-gray-500">
-             <span>CleanTrack</span>
-             <span>/</span>
-             <span className="text-gray-900 font-medium capitalize">{currentView}</span>
-          </div>
-          <div className="flex items-center gap-4">
-            <DevBypassBanner />
-            <div className="flex items-center gap-1 text-[12px] text-gray-400 font-medium mr-4">
-              <button onClick={() => setCurrentPeriod(getFortnightForDate(new Date(currentPeriod.startDate.getTime() - 14 * 24 * 60 * 60 * 1000)))} className="p-1 hover:bg-black/5 rounded"><ChevronLeft size={14} /></button>
-              <span className="px-2">{format(currentPeriod.startDate, 'MMM d')} — {format(currentPeriod.endDate, 'MMM d')}</span>
-              <button onClick={() => setCurrentPeriod(getFortnightForDate(new Date(currentPeriod.startDate.getTime() + 14 * 24 * 60 * 60 * 1000)))} className="p-1 hover:bg-black/5 rounded"><ChevronRight size={14} /></button>
+    <div className="flex min-h-screen bg-white min-w-0">
+      <Sidebar
+        currentView={currentView === 'site-detail' ? 'dashboard' : currentView}
+        onViewChange={setCurrentView}
+        mobileOpen={sidebarMobileOpen}
+        onMobileClose={() => setSidebarMobileOpen(false)}
+      />
+      <main className="flex-1 overflow-x-hidden flex flex-col min-w-0 lg:pl-60">
+        <nav className="min-h-12 border-b border-[#edeef0] flex flex-wrap items-center justify-between gap-2 px-3 sm:px-6 py-2 sticky top-0 bg-white/95 backdrop-blur-md z-30">
+          <div className="flex items-center gap-2 min-w-0">
+            <button
+              type="button"
+              onClick={() => setSidebarMobileOpen(true)}
+              className="lg:hidden p-2 -ml-2 rounded-md text-gray-600 hover:bg-black/5 touch-manipulation"
+              aria-label="Open menu"
+            >
+              <Menu size={20} />
+            </button>
+            <div className="flex items-center gap-2 text-sm text-gray-500 min-w-0 truncate">
+              <span className="truncate">CleanTrack</span>
+              <span>/</span>
+              <span className="text-gray-900 font-medium capitalize truncate">{currentView.replace('-', ' ')}</span>
             </div>
-            <button onClick={() => { logout(); signOutApp(); }} className="text-[10px] font-bold text-red-500 hover:text-red-700 uppercase tracking-widest">Logout</button>
+          </div>
+          <div className="flex items-center gap-2 sm:gap-4 flex-shrink-0">
+            <DevBypassBanner />
+            <div className="flex items-center gap-1 text-[11px] sm:text-[12px] text-gray-400 font-medium">
+              <button onClick={() => setCurrentPeriod(getFortnightForDate(new Date(currentPeriod.startDate.getTime() - 14 * 24 * 60 * 60 * 1000)))} className="p-1.5 sm:p-1 hover:bg-black/5 rounded touch-manipulation" aria-label="Previous period"><ChevronLeft size={16} /></button>
+              <span className="px-1 sm:px-2 whitespace-nowrap">{format(currentPeriod.startDate, 'MMM d')} — {format(currentPeriod.endDate, 'MMM d')}</span>
+              <button onClick={() => setCurrentPeriod(getFortnightForDate(new Date(currentPeriod.startDate.getTime() + 14 * 24 * 60 * 60 * 1000)))} className="p-1.5 sm:p-1 hover:bg-black/5 rounded touch-manipulation" aria-label="Next period"><ChevronRight size={16} /></button>
+            </div>
+            <button onClick={() => { logout(); signOutApp(); }} className="text-[10px] font-bold text-red-500 hover:text-red-700 uppercase tracking-widest py-2 px-2 touch-manipulation">Logout</button>
           </div>
         </nav>
-        <div className="max-w-5xl w-full mx-auto p-12 lg:px-24">
-          <header className="mb-12">
-             <h1 className="text-4xl font-bold text-gray-900 tracking-tight capitalize mb-2">{currentView.replace('-', ' ')}</h1>
-             <div className="w-full h-[1px] bg-[#edeef0] mt-8"></div>
+        <div className={`flex-1 w-full mx-auto p-4 sm:p-6 lg:p-12 box-border ${['sites', 'dashboard', 'cleaners', 'team', 'adhoc-jobs'].includes(currentView) ? 'max-w-7xl' : 'max-w-5xl'}`}>
+          <header className="mb-6 sm:mb-12">
+             <h1 className="text-2xl sm:text-4xl font-bold text-gray-900 tracking-tight capitalize mb-2">{currentView.replace('-', ' ')}</h1>
+             <div className="w-full h-[1px] bg-[#edeef0] mt-4 sm:mt-8"></div>
           </header>
           {dataLoading ? <Loader2 className="animate-spin text-gray-200" /> : renderContent()}
         </div>

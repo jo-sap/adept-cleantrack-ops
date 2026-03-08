@@ -1,5 +1,5 @@
-import React, { useState, useEffect, useCallback } from "react";
-import { Plus, Edit3, X, MapPin, Loader2, Trash2, Layers } from "lucide-react";
+import React, { useState, useEffect, useCallback, useRef, useMemo } from "react";
+import { Plus, Edit3, X, MapPin, Loader2, Trash2, Layers, Search, ChevronUp, ChevronDown, UserMinus, UserPlus } from "lucide-react";
 import { useRole } from "../contexts/RoleContext";
 import { useAppAuth } from "../contexts/AppAuthContext";
 import { getGraphAccessToken } from "../lib/graph";
@@ -15,15 +15,15 @@ import {
   type Site,
   type SitePayload,
 } from "../repositories/sitesRepo";
-import { getAssignedSiteIdsForManager, createSiteManagerAssignment, getAssignedManagersForSite, deleteSiteManagerAssignment } from "../repositories/siteManagersRepo";
+import { getAssignedSiteIdsForManager, createSiteManagerAssignment, getAssignedManagersForSite, deleteSiteManagerAssignment, fetchSiteManagerAssignments, joinAssignmentsToSites } from "../repositories/siteManagersRepo";
 import { getCleanTrackManagers } from "../repositories/usersRepo";
 import { createSiteBudget, getSiteBudgets, updateSiteBudget, type SiteBudgetHours } from "../repositories/budgetsRepo";
-import { getAssignedCleanersBySite } from "../repositories/assignedCleanersRepo";
 
 const AU_STATES = ["ACT", "NSW", "NT", "QLD", "SA", "TAS", "VIC", "WA"];
 const DAY_LABELS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"] as const;
 type DayKey = (typeof DAY_LABELS)[number];
-const DAY_KEYS: DayKey[] = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+/** Display order: Monday first, Sunday last. */
+const DAY_KEYS: DayKey[] = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
 
 type VisitFreq = "Weekly" | "Fortnightly" | "Monthly";
 
@@ -35,6 +35,7 @@ interface BulkSiteRow {
   address: string;
   monthlyRevenue: number | "";
   fortnightCostBudget: number | "";
+  budgetLabourRate: number | "";
   state: string;
   active: boolean;
   visitFrequency: VisitFreq;
@@ -57,7 +58,9 @@ const SiteManager: React.FC<SiteManagerProps> = ({ onUpdateSite }) => {
 
   const [sites, setSites] = useState<Site[]>([]);
   const [budgetsBySiteId, setBudgetsBySiteId] = useState<Record<string, SiteBudgetHours>>({});
-  const [assignedCleanersBySiteId, setAssignedCleanersBySiteId] = useState<Record<string, { name: string; payRate: number }[]>>({});
+  const [assignedManagersBySiteId, setAssignedManagersBySiteId] = useState<
+    Record<string, { assignedManagers: { managerName: string; assignmentItemId: string }[] }>
+  >({});
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [toast, setToast] = useState<string | null>(null);
@@ -72,7 +75,7 @@ const SiteManager: React.FC<SiteManagerProps> = ({ onUpdateSite }) => {
   });
   const [submitLoading, setSubmitLoading] = useState(false);
   const [submitError, setSubmitError] = useState<string | null>(null);
-  const [managers, setManagers] = useState<{ fullName: string; email: string }[]>([]);
+  const [managers, setManagers] = useState<{ id: string; fullName: string; email: string }[]>([]);
   const [dailyHours, setDailyHours] = useState<Record<DayKey, number>>({
     Sun: 0, Mon: 0, Tue: 0, Wed: 0, Thu: 0, Fri: 0, Sat: 0,
   });
@@ -80,23 +83,31 @@ const SiteManager: React.FC<SiteManagerProps> = ({ onUpdateSite }) => {
     Sun: 0, Mon: 0, Tue: 0, Wed: 0, Thu: 0, Fri: 0, Sat: 0,
   });
   const [fortnightCostBudget, setFortnightCostBudget] = useState<number | "">("");
-  const [selectedManagerEmails, setSelectedManagerEmails] = useState<string[]>([]);
+  const [selectedManagerIds, setSelectedManagerIds] = useState<string[]>([]);
   const [visitFrequency, setVisitFrequency] = useState<VisitFreq>("Weekly");
   const [hoursPerVisit, setHoursPerVisit] = useState<number | "">("");
+  const [budgetLabourRate, setBudgetLabourRate] = useState<number | "">("");
 
   const [bulkModalOpen, setBulkModalOpen] = useState(false);
   const [bulkRows, setBulkRows] = useState<BulkSiteRow[]>([]);
-  const [bulkManagerEmails, setBulkManagerEmails] = useState<string[]>([]);
+  const [bulkManagerIds, setBulkManagerIds] = useState<string[]>([]);
   const [bulkSubmitLoading, setBulkSubmitLoading] = useState(false);
   const [bulkProgress, setBulkProgress] = useState<{ current: number; total: number } | null>(null);
   const [bulkError, setBulkError] = useState<string | null>(null);
+  const [siteSearchQuery, setSiteSearchQuery] = useState("");
+  type SiteSortKey = "name" | "address" | "state" | "fortnightlyCap";
+  const [siteSortBy, setSiteSortBy] = useState<SiteSortKey>("name");
+  const [siteSortDir, setSiteSortDir] = useState<"asc" | "desc">("asc");
+  const [selectedSiteIds, setSelectedSiteIds] = useState<string[]>([]);
+  const [bulkDeleteLoading, setBulkDeleteLoading] = useState(false);
+  const editingSiteIdRef = useRef<string | null>(null);
 
   const showToast = useCallback((msg: string) => {
     setToast(msg);
     setTimeout(() => setToast(null), 4000);
   }, []);
 
-  const loadSites = useCallback(async () => {
+  const loadSites = useCallback(async (silent = false) => {
     const token = await getGraphAccessToken();
     if (!token) {
       setError("Sign in with Microsoft to view sites.");
@@ -104,27 +115,42 @@ const SiteManager: React.FC<SiteManagerProps> = ({ onUpdateSite }) => {
       setLoading(false);
       return;
     }
-    setLoading(true);
-    setError(null);
+    if (!silent) {
+      setLoading(true);
+      setError(null);
+    }
     try {
       let data = await getSites(token);
       if (!isAdmin && user?.role === "Manager" && user?.email) {
-        const assignedIds = await getAssignedSiteIdsForManager(token, user.email);
-        data = assignedIds.length > 0 ? data.filter((s) => assignedIds.includes(s.id)) : [];
+        const isAllSites = user.permissionScope?.trim().toLowerCase() === "allsites";
+        if (!isAllSites) {
+          const assignedIds = await getAssignedSiteIdsForManager(token, user.email);
+          data = assignedIds.length > 0 ? data.filter((s) => assignedIds.includes(s.id)) : [];
+        }
       }
       setSites(data);
-      const [budgets, cleanersMap] = await Promise.all([
+      const [budgets, managersList, assignments] = await Promise.all([
         getSiteBudgets(token).catch(() => ({})),
-        getAssignedCleanersBySite(token).catch(() => ({})),
+        getCleanTrackManagers(token).catch(() => []),
+        fetchSiteManagerAssignments(token).catch(() => []),
       ]);
       setBudgetsBySiteId(budgets);
-      setAssignedCleanersBySiteId(cleanersMap);
+      setManagers(managersList);
+      const joined = joinAssignmentsToSites(data, assignments);
+      setAssignedManagersBySiteId(
+        Object.fromEntries(
+          Object.entries(joined).map(([id, v]) => [
+            id,
+            { assignedManagers: v.assignedManagers.map((a) => ({ managerName: a.managerName, assignmentItemId: a.id })) },
+          ])
+        )
+      );
     } catch (e) {
       const msg = e instanceof Error ? e.message : "Failed to load sites.";
       setError(msg);
       setSites([]);
     } finally {
-      setLoading(false);
+      if (!silent) setLoading(false);
     }
   }, [isAdmin, user?.role, user?.email]);
 
@@ -132,9 +158,57 @@ const SiteManager: React.FC<SiteManagerProps> = ({ onUpdateSite }) => {
     loadSites();
   }, [loadSites]);
 
+  const filteredSites = React.useMemo(() => {
+    const q = siteSearchQuery.trim().toLowerCase();
+    if (!q) return sites;
+    return sites.filter(
+      (s) =>
+        (s.siteName?.toLowerCase().includes(q) ?? false) ||
+        (s.address?.toLowerCase().includes(q) ?? false)
+    );
+  }, [sites, siteSearchQuery]);
+
+  const sortedSites = React.useMemo(() => {
+    const list = [...filteredSites];
+    list.sort((a, b) => {
+      const budgetA = budgetsBySiteId[String(a.id)] ?? budgetsBySiteId["name:" + ((a.siteName || "").trim() + " Budget")];
+      const budgetB = budgetsBySiteId[String(b.id)] ?? budgetsBySiteId["name:" + ((b.siteName || "").trim() + " Budget")];
+      const capA = budgetA?.fortnightCap ?? 0;
+      const capB = budgetB?.fortnightCap ?? 0;
+      let cmp = 0;
+      if (siteSortBy === "name") {
+        const na = (a.siteName || "Unnamed site").toLowerCase();
+        const nb = (b.siteName || "Unnamed site").toLowerCase();
+        cmp = na.localeCompare(nb);
+      } else if (siteSortBy === "address") {
+        const aa = (a.address || "").toLowerCase();
+        const ab = (b.address || "").toLowerCase();
+        cmp = aa.localeCompare(ab);
+      } else if (siteSortBy === "state") {
+        const sa = (a.state || "").toLowerCase();
+        const sb = (b.state || "").toLowerCase();
+        cmp = sa.localeCompare(sb);
+      } else {
+        cmp = capA - capB;
+      }
+      return siteSortDir === "asc" ? cmp : -cmp;
+    });
+    return list;
+  }, [filteredSites, siteSortBy, siteSortDir, budgetsBySiteId]);
+
+  const handleSiteSort = (key: SiteSortKey) => {
+    if (siteSortBy === key) {
+      setSiteSortDir((d) => (d === "asc" ? "desc" : "asc"));
+    } else {
+      setSiteSortBy(key);
+      setSiteSortDir(key === "fortnightlyCap" ? "desc" : "asc");
+    }
+  };
+
   const openAdd = () => {
     setModalMode("add");
     setEditingSite(null);
+    editingSiteIdRef.current = null;
     setForm({
       siteName: "",
       address: "",
@@ -147,6 +221,7 @@ const SiteManager: React.FC<SiteManagerProps> = ({ onUpdateSite }) => {
     setFortnightCostBudget("");
     setVisitFrequency("Weekly");
     setHoursPerVisit("");
+    setBudgetLabourRate("");
     setSelectedManagerEmails([]);
     setSubmitError(null);
     getGraphAccessToken().then((token) => {
@@ -158,6 +233,7 @@ const SiteManager: React.FC<SiteManagerProps> = ({ onUpdateSite }) => {
   const openEdit = (site: Site) => {
     setModalMode("edit");
     setEditingSite(site);
+    editingSiteIdRef.current = site.id;
     setForm({
       siteName: site.siteName,
       address: site.address,
@@ -201,21 +277,28 @@ const SiteManager: React.FC<SiteManagerProps> = ({ onUpdateSite }) => {
     setHoursPerVisit(
       budget?.hoursPerVisit != null && budget.hoursPerVisit > 0 ? budget.hoursPerVisit : ""
     );
+    setBudgetLabourRate(
+      budget?.budgetLabourRate != null && budget.budgetLabourRate > 0 ? budget.budgetLabourRate : ""
+    );
     setSubmitError(null);
     getGraphAccessToken().then(async (token) => {
       if (!token) return;
+      const siteIdBeingLoaded = site.id;
       const [managersList, assignments] = await Promise.all([
         getCleanTrackManagers(token).catch(() => []),
         getAssignedManagersForSite(token, site.id).catch(() => []),
       ]);
       setManagers(managersList);
-      setSelectedManagerEmails(assignments.map((a) => a.email));
+      if (editingSiteIdRef.current === siteIdBeingLoaded) {
+        setSelectedManagerIds(assignments.map((a) => a.managerId));
+      }
     });
   };
 
   const closeModal = () => {
     setModalMode(null);
     setEditingSite(null);
+    editingSiteIdRef.current = null;
     setSubmitError(null);
   };
 
@@ -226,6 +309,7 @@ const SiteManager: React.FC<SiteManagerProps> = ({ onUpdateSite }) => {
     address: "",
     monthlyRevenue: "",
     fortnightCostBudget: "",
+    budgetLabourRate: "",
     state: "",
     active: true,
     visitFrequency: "Weekly",
@@ -237,7 +321,7 @@ const SiteManager: React.FC<SiteManagerProps> = ({ onUpdateSite }) => {
   const openBulkModal = () => {
     setBulkModalOpen(true);
     setBulkRows([createEmptyBulkRow()]);
-    setBulkManagerEmails([]);
+    setBulkManagerIds([]);
     setBulkProgress(null);
     setBulkError(null);
     getGraphAccessToken().then((token) => {
@@ -311,14 +395,17 @@ const SiteManager: React.FC<SiteManagerProps> = ({ onUpdateSite }) => {
               week2FridayHours: row.dailyHoursWeek2.Fri,
               week2SaturdayHours: row.dailyHoursWeek2.Sat,
             }),
+            ...(row.budgetLabourRate !== "" && !Number.isNaN(Number(row.budgetLabourRate)) && { budgetLabourRate: Number(row.budgetLabourRate) }),
           });
         } catch (budgetErr) {
           console.warn("Bulk: site budget create failed for", siteName, budgetErr);
         }
-        for (const email of bulkManagerEmails) {
+        for (const managerId of bulkManagerIds) {
           try {
-            await createSiteManagerAssignment(token, siteId, email, {
-              assignmentName: `${siteName} - ${email}`,
+            const managerFullName = managers.find((m) => m.id === managerId)?.fullName ?? "";
+            await createSiteManagerAssignment(token, siteId, managerId, {
+              siteName,
+              managerFullName,
             });
           } catch {
             // ignore per-manager errors
@@ -337,7 +424,7 @@ const SiteManager: React.FC<SiteManagerProps> = ({ onUpdateSite }) => {
     setBulkSubmitLoading(false);
     setBulkModalOpen(false);
     showToast(successCount === rows.length ? `Added ${successCount} sites.` : `Added ${successCount} of ${rows.length} sites.`);
-    await loadSites();
+    await loadSites(true);
     onUpdateSite?.();
   };
 
@@ -388,17 +475,20 @@ const SiteManager: React.FC<SiteManagerProps> = ({ onUpdateSite }) => {
               week2FridayHours: dailyHoursWeek2.Fri,
               week2SaturdayHours: dailyHoursWeek2.Sat,
             }),
+            ...(budgetLabourRate !== "" && !Number.isNaN(Number(budgetLabourRate)) && { budgetLabourRate: Number(budgetLabourRate) }),
           });
         } catch (budgetErr) {
           console.warn("Site budget create failed (site was created):", budgetErr);
         }
-        for (const email of selectedManagerEmails) {
+        for (const managerId of selectedManagerIds) {
           try {
-            await createSiteManagerAssignment(token, siteId, email, {
-              assignmentName: `${form.siteName.trim()} - ${email}`,
+            const managerFullName = managers.find((m) => m.id === managerId)?.fullName ?? "";
+            await createSiteManagerAssignment(token, siteId, managerId, {
+              siteName: form.siteName.trim(),
+              managerFullName,
             });
           } catch (assignErr) {
-            console.warn("Manager assignment failed for", email, assignErr);
+            console.warn("Manager assignment failed for", managerId, assignErr);
           }
         }
         showToast("Site added.");
@@ -432,6 +522,7 @@ const SiteManager: React.FC<SiteManagerProps> = ({ onUpdateSite }) => {
           week2ThursdayHours: isFortnightly ? dailyHoursWeek2.Thu : 0,
           week2FridayHours: isFortnightly ? dailyHoursWeek2.Fri : 0,
           week2SaturdayHours: isFortnightly ? dailyHoursWeek2.Sat : 0,
+          ...(budgetLabourRate !== "" && !Number.isNaN(Number(budgetLabourRate)) && { budgetLabourRate: Number(budgetLabourRate) }),
         };
         if (budget?.budgetListItemId) {
           await updateSiteBudget(token, budget.budgetListItemId, budgetPayload);
@@ -459,10 +550,10 @@ const SiteManager: React.FC<SiteManagerProps> = ({ onUpdateSite }) => {
           });
         }
         const currentAssignments = await getAssignedManagersForSite(token, editingSite.id);
-        const currentEmails = new Set(currentAssignments.map((a) => a.email.toLowerCase()));
-        const selectedSet = new Set(selectedManagerEmails.map((e) => e.toLowerCase()));
+        const currentIds = new Set(currentAssignments.map((a) => a.managerId));
+        const selectedSet = new Set(selectedManagerIds);
         for (const a of currentAssignments) {
-          if (!selectedSet.has(a.email.toLowerCase())) {
+          if (!selectedSet.has(a.managerId)) {
             try {
               await deleteSiteManagerAssignment(token, a.itemId);
             } catch (err) {
@@ -470,21 +561,30 @@ const SiteManager: React.FC<SiteManagerProps> = ({ onUpdateSite }) => {
             }
           }
         }
-        for (const email of selectedManagerEmails) {
-          if (!currentEmails.has(email.toLowerCase())) {
+        const managerErrors: string[] = [];
+        for (const managerId of selectedManagerIds) {
+          if (!currentIds.has(managerId)) {
             try {
-              await createSiteManagerAssignment(token, editingSite.id, email, {
-                assignmentName: `${form.siteName.trim()} - ${email}`,
+              const managerFullName = managers.find((m) => m.id === managerId)?.fullName ?? "";
+              await createSiteManagerAssignment(token, editingSite.id, managerId, {
+                siteName: form.siteName.trim(),
+                managerFullName,
               });
             } catch (err) {
+              const msg = err instanceof Error ? err.message : String(err);
               console.warn("Add manager assignment failed:", err);
+              managerErrors.push(`${managerId}: ${msg}`);
             }
           }
         }
-        showToast("Site updated.");
+        if (managerErrors.length > 0) {
+          showToast(`Site updated but manager assignment failed: ${managerErrors.join("; ")}`);
+        } else {
+          showToast("Site updated.");
+        }
       }
       closeModal();
-      await loadSites();
+      await loadSites(true);
       onUpdateSite?.();
     } catch (e) {
       const msg = e instanceof Error ? e.message : "Save failed.";
@@ -527,7 +627,7 @@ const SiteManager: React.FC<SiteManagerProps> = ({ onUpdateSite }) => {
     try {
       await setSiteActive(token, site.id, active);
       showToast(active ? "Site activated." : "Site deactivated.");
-      await loadSites();
+      await loadSites(true);
       onUpdateSite?.();
     } catch (e) {
       const msg = e instanceof Error ? e.message : "Update failed.";
@@ -547,7 +647,7 @@ const SiteManager: React.FC<SiteManagerProps> = ({ onUpdateSite }) => {
     try {
       await deleteSite(token, site.id);
       showToast("Site deleted.");
-      await loadSites();
+      await loadSites(true);
       onUpdateSite?.();
     } catch (e) {
       const msg = e instanceof Error ? e.message : "Delete failed.";
@@ -555,32 +655,142 @@ const SiteManager: React.FC<SiteManagerProps> = ({ onUpdateSite }) => {
     }
   };
 
+  const selectedSet = React.useMemo(() => new Set(selectedSiteIds), [selectedSiteIds]);
+  const handleRemoveManagerFromSite = useCallback(
+    async (siteName: string, assignmentItemId: string) => {
+      const token = await getGraphAccessToken();
+      if (!token) {
+        showToast("Sign in with Microsoft to remove managers.");
+        return;
+      }
+      try {
+        await deleteSiteManagerAssignment(token, assignmentItemId);
+        showToast("Manager removed from site.");
+        await loadSites(true);
+        onUpdateSite?.();
+      } catch (e) {
+        const msg = e instanceof Error ? e.message : "Failed to remove manager.";
+        showToast(msg);
+      }
+    },
+    [loadSites, onUpdateSite, showToast]
+  );
+
+  const selectedManagerIdsSet = useMemo(
+    () => new Set(selectedManagerIds),
+    [selectedManagerIds]
+  );
+  const selectAllFiltered = () => {
+    if (selectedSet.size === sortedSites.length) {
+      setSelectedSiteIds([]);
+    } else {
+      setSelectedSiteIds(sortedSites.map((s) => s.id));
+    }
+  };
+
+  const handleBulkDelete = async () => {
+    if (selectedSiteIds.length === 0) return;
+    if (
+      !window.confirm(
+        `Delete ${selectedSiteIds.length} selected site(s)? Sites will be removed from the list (moved to recycle bin). Related budgets and timesheet entries may still reference them.`
+      )
+    ) return;
+    const token = await getGraphAccessToken();
+    if (!token) {
+      showToast("Sign in with Microsoft to delete sites.");
+      return;
+    }
+    setBulkDeleteLoading(true);
+    setError(null);
+    let deleted = 0;
+    let failed = 0;
+    try {
+      for (const id of selectedSiteIds) {
+        try {
+          await deleteSite(token, id);
+          deleted++;
+        } catch {
+          failed++;
+        }
+      }
+      setSelectedSiteIds([]);
+      await loadSites(true);
+      onUpdateSite?.();
+      if (failed > 0) {
+        showToast(`Deleted ${deleted} site(s). ${failed} failed.`);
+      } else {
+        showToast(deleted === 1 ? "Site deleted." : `Deleted ${deleted} sites.`);
+      }
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : "Bulk delete failed.";
+      showToast(msg.includes("403") || msg.includes("401") ? `Permission missing. ${WRITE_PERMISSION_HINT}` : msg);
+    } finally {
+      setBulkDeleteLoading(false);
+    }
+  };
+
   return (
-    <div className="space-y-8">
-      <div className="flex justify-between items-end border-b border-[#edeef0] pb-4">
-        <div>
-          <h2 className="text-3xl font-bold text-gray-900">Sites</h2>
+    <div className="space-y-6 sm:space-y-8">
+      <div className="flex flex-col sm:flex-row sm:justify-between sm:items-end gap-4 border-b border-[#edeef0] pb-4">
+        <div className="min-w-0">
+          <h2 className="text-2xl sm:text-3xl font-bold text-gray-900">Sites</h2>
           <p className="text-gray-500 text-sm mt-1">
             Sites &amp; Budgets — Configure service windows and financial caps per site.
           </p>
         </div>
         {isAdmin && (
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-2 flex-shrink-0">
             <button
               onClick={openBulkModal}
-              className="bg-white text-gray-900 border border-[#edeef0] px-4 py-2 rounded-lg text-sm font-bold hover:bg-gray-50 transition-colors flex items-center gap-2"
+              className="bg-white text-gray-900 border border-[#edeef0] px-4 py-2.5 rounded-lg text-sm font-bold hover:bg-gray-50 transition-colors flex items-center gap-2 touch-manipulation"
             >
               <Layers size={16} /> Bulk Add
             </button>
             <button
               onClick={openAdd}
-              className="bg-gray-900 text-white px-4 py-2 rounded-lg text-sm font-bold hover:bg-gray-800 transition-colors flex items-center gap-2"
+              className="bg-gray-900 text-white px-4 py-2.5 rounded-lg text-sm font-bold hover:bg-gray-800 transition-colors flex items-center gap-2 touch-manipulation"
             >
               <Plus size={16} /> New Site
             </button>
           </div>
         )}
       </div>
+
+      <div className="relative">
+        <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" size={18} />
+        <input
+          type="search"
+          placeholder="Search sites by name or address…"
+          value={siteSearchQuery}
+          onChange={(e) => setSiteSearchQuery(e.target.value)}
+          className="w-full pl-10 pr-4 py-2.5 border border-[#edeef0] rounded-lg text-sm text-gray-900 placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-gray-900/10 focus:border-gray-400"
+          aria-label="Search sites"
+        />
+      </div>
+
+      {isAdmin && selectedSiteIds.length > 0 && (
+        <div className="sticky top-12 z-20 flex flex-wrap items-center gap-2 py-2 px-3 bg-amber-50 border border-amber-200 rounded-lg shadow-sm">
+          <span className="text-sm font-medium text-amber-800">
+            {selectedSiteIds.length} selected
+          </span>
+          <button
+            type="button"
+            onClick={handleBulkDelete}
+            disabled={bulkDeleteLoading}
+            className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold bg-red-600 text-white hover:bg-red-700 disabled:opacity-50"
+          >
+            {bulkDeleteLoading ? <Loader2 className="animate-spin" size={14} /> : <Trash2 size={14} />}
+            Delete selected
+          </button>
+          <button
+            type="button"
+            onClick={() => setSelectedSiteIds([])}
+            className="text-xs font-medium text-amber-800 hover:text-amber-900"
+          >
+            Clear selection
+          </button>
+        </div>
+      )}
 
       {toast && (
         <div className="bg-green-50 border border-green-200 text-green-800 px-4 py-2 rounded-lg text-sm">
@@ -596,13 +806,89 @@ const SiteManager: React.FC<SiteManagerProps> = ({ onUpdateSite }) => {
         <div className="bg-amber-50 border border-amber-200 text-amber-800 px-4 py-3 rounded-lg">
           {error}
         </div>
-      ) : sites.length === 0 ? (
-        <div className="text-gray-500 py-8">No sites found.</div>
+      ) : filteredSites.length === 0 ? (
+        <div className="text-gray-500 py-8">
+          {siteSearchQuery.trim() ? "No sites match your search." : "No sites found."}
+        </div>
       ) : (
-        <div className="space-y-3">
-          {sites.map((site) => {
+        <>
+        <div className="border border-[#edeef0] rounded-lg bg-white shadow-sm overflow-hidden table-scroll-mobile">
+          <table className="w-full border-collapse text-left min-w-0 table-auto md:table-fixed md:min-w-[800px]">
+            <colgroup className="hidden md:contents">
+              {isAdmin && <col style={{ width: '4%' }} />}
+              <col style={{ width: isAdmin ? '17%' : '20%' }} />
+              <col style={{ width: isAdmin ? '17%' : '22%' }} />
+              <col style={{ width: '6%' }} />
+              <col style={{ width: '11%' }} />
+              <col style={{ width: isAdmin ? '22%' : '24%' }} />
+              <col style={{ width: '8%' }} />
+              <col style={{ width: isAdmin ? '6%' : '8%' }} />
+              {isAdmin && <col style={{ width: '10%' }} />}
+            </colgroup>
+            <thead>
+              <tr className="bg-[#fcfcfb] border-b border-[#edeef0]">
+                {isAdmin && (
+                  <th className="px-2 py-2 md:px-1.5 md:py-1.5 w-10">
+                    <input
+                      type="checkbox"
+                      checked={sortedSites.length > 0 && selectedSet.size === sortedSites.length}
+                      onChange={selectAllFiltered}
+                      className="rounded border-gray-300"
+                      aria-label="Select all"
+                    />
+                  </th>
+                )}
+                <th className="px-2 py-2 md:px-1.5 md:py-1.5 text-left">
+                  <button
+                    type="button"
+                    onClick={() => handleSiteSort("name")}
+                    className="text-[9px] font-bold text-gray-500 uppercase tracking-widest flex items-center gap-0.5 hover:text-gray-900 focus:outline-none focus:ring-2 focus:ring-gray-900/20 rounded"
+                  >
+                    Site name
+                    {siteSortBy === "name" && (siteSortDir === "asc" ? <ChevronUp size={12} /> : <ChevronDown size={12} />)}
+                  </button>
+                </th>
+                <th className="hidden md:table-cell px-1.5 py-1.5 text-left">
+                  <button
+                    type="button"
+                    onClick={() => handleSiteSort("address")}
+                    className="text-[9px] font-bold text-gray-500 uppercase tracking-widest flex items-center gap-0.5 hover:text-gray-900 focus:outline-none focus:ring-2 focus:ring-gray-900/20 rounded"
+                  >
+                    Address
+                    {siteSortBy === "address" && (siteSortDir === "asc" ? <ChevronUp size={12} /> : <ChevronDown size={12} />)}
+                  </button>
+                </th>
+                <th className="hidden md:table-cell px-1.5 py-1.5 text-left">
+                  <button
+                    type="button"
+                    onClick={() => handleSiteSort("state")}
+                    className="text-[9px] font-bold text-gray-500 uppercase tracking-widest flex items-center gap-0.5 hover:text-gray-900 focus:outline-none focus:ring-2 focus:ring-gray-900/20 rounded"
+                  >
+                    State
+                    {siteSortBy === "state" && (siteSortDir === "asc" ? <ChevronUp size={12} /> : <ChevronDown size={12} />)}
+                  </button>
+                </th>
+                <th className="hidden md:table-cell px-1.5 py-1.5 text-[9px] font-bold text-gray-500 uppercase tracking-widest">Assigned managers</th>
+                <th className="px-2 py-2 md:px-1.5 md:py-1.5 text-[9px] font-bold text-gray-500 uppercase tracking-widest">Daily hours</th>
+                <th className="hidden md:table-cell px-1.5 py-1.5 text-[9px] font-bold text-gray-500 uppercase tracking-widest">Budget rate</th>
+                <th className="px-2 py-2 md:px-1.5 md:py-1.5">
+                  <button
+                    type="button"
+                    onClick={() => handleSiteSort("fortnightlyCap")}
+                    className="text-[9px] font-bold text-gray-500 uppercase tracking-widest flex items-center gap-0.5 hover:text-gray-900 focus:outline-none focus:ring-2 focus:ring-gray-900/20 rounded"
+                  >
+                    Fortnight cap
+                    {siteSortBy === "fortnightlyCap" && (siteSortDir === "asc" ? <ChevronUp size={12} /> : <ChevronDown size={12} />)}
+                  </button>
+                </th>
+                {isAdmin && (
+                  <th className="px-2 py-2 md:px-1.5 md:py-1.5 text-[9px] font-bold text-gray-500 uppercase tracking-widest text-right">Actions</th>
+                )}
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-[#edeef0]">
+          {sortedSites.map((site) => {
             const budget = budgetsBySiteId[String(site.id)];
-            const cleaners = assignedCleanersBySiteId[site.id] ?? [];
             const dayHours = budget
               ? [
                   { day: "Mon" as const, h: budget.monday },
@@ -615,84 +901,141 @@ const SiteManager: React.FC<SiteManagerProps> = ({ onUpdateSite }) => {
                 ]
               : [];
             const fortnightCap = budget?.fortnightCap ?? 0;
+            const budgetRate = budget?.budgetLabourRate;
 
             return (
-              <div
-                key={site.id}
-                className="border border-[#edeef0] rounded-lg bg-white shadow-sm px-4 py-3 flex flex-wrap items-center justify-between gap-2"
-              >
-                <div className="flex-1 min-w-0 flex flex-wrap items-center gap-x-4 gap-y-1">
-                  <h3 className="text-base font-bold text-gray-900">{site.siteName || "Unnamed site"}</h3>
-                  {site.address && (
-                    <p className="text-xs text-gray-600 flex items-center gap-1">
-                      <MapPin size={12} className="text-gray-400 shrink-0" />
-                      {site.address}
-                    </p>
-                  )}
-                  <div className="flex flex-wrap gap-1.5">
-                    {cleaners.length === 0 ? (
-                      <span className="text-[11px] text-gray-400">No assigned cleaners</span>
-                    ) : (
-                      cleaners.map((c, i) => (
-                        <span
-                          key={i}
-                          className="inline-flex items-center px-2 py-0.5 rounded-full text-[11px] font-medium bg-gray-100 text-gray-800"
-                        >
-                          {c.name} ${c.payRate}/h
-                        </span>
-                      ))
-                    )}
-                  </div>
-                </div>
-                <div className="flex flex-wrap items-center gap-2">
-                  <div className="flex flex-wrap gap-1">
-                    {dayHours.map(({ day, h }) => (
-                      <span
-                        key={day}
-                        className={`inline-flex items-center px-1.5 py-0.5 rounded text-[11px] font-medium ${
-                          (h ?? 0) > 0 ? "bg-blue-100 text-blue-800" : "bg-gray-50 text-gray-400"
-                        }`}
-                      >
-                        {day} {h ?? 0}h
-                      </span>
-                    ))}
-                  </div>
-                  <div className="text-right shrink-0">
-                    <p className="text-[9px] font-bold text-gray-500 uppercase tracking-wider">FORTNIGHTLY CAP</p>
-                    <p className="text-lg font-bold text-gray-900 leading-tight">{fortnightCap}h</p>
-                  </div>
-                </div>
+              <tr key={site.id} className="hover:bg-[#f7f6f3] transition-colors">
                 {isAdmin && (
-                  <div className="w-full flex items-center justify-end gap-2 pt-1.5 mt-1 border-t border-[#edeef0]">
-                    <button
-                      onClick={() => openEdit(site)}
-                      className="text-blue-600 hover:text-blue-800 text-xs font-medium flex items-center gap-1"
-                    >
-                      <Edit3 size={12} /> Edit
-                    </button>
-                    <button
-                      onClick={() => handleSetActive(site, !site.active)}
-                      className="text-gray-600 hover:text-gray-900 text-xs font-medium"
-                    >
-                      {site.active ? "Deactivate" : "Activate"}
-                    </button>
-                    <button
-                      onClick={() => handleDeleteSite(site)}
-                      className="text-red-600 hover:text-red-800 text-xs font-medium flex items-center gap-1"
-                      title="Delete site"
-                    >
-                      <Trash2 size={12} /> Delete
-                    </button>
-                  </div>
+                  <td className="px-2 py-2 md:px-1.5 md:py-1.5 align-top">
+                    <input
+                      type="checkbox"
+                      checked={selectedSet.has(site.id)}
+                      onChange={() => {
+                        setSelectedSiteIds((prev) =>
+                          prev.includes(site.id) ? prev.filter((id) => id !== site.id) : [...prev, site.id]
+                        );
+                      }}
+                      className="rounded border-gray-300"
+                      aria-label={`Select ${site.siteName || "Unnamed site"}`}
+                    />
+                  </td>
                 )}
-              </div>
+                <td className="px-2 py-2 md:px-1.5 md:py-1.5 align-top min-w-[120px]">
+                  <span className="text-sm md:text-xs font-bold text-gray-900 break-words">{site.siteName || "Unnamed site"}</span>
+                </td>
+                <td className="hidden md:table-cell px-1.5 py-1.5 align-top">
+                  {site.address ? (
+                    <span className="text-[11px] text-gray-600 flex items-center gap-0.5 break-words">
+                      <MapPin size={10} className="text-gray-400 shrink-0 flex-shrink-0" />
+                      {site.address}
+                    </span>
+                  ) : (
+                    <span className="text-[11px] text-gray-400">—</span>
+                  )}
+                </td>
+                <td className="hidden md:table-cell px-1.5 py-1.5 align-top whitespace-nowrap">
+                  <span className="text-[11px] font-medium text-gray-700">{site.state || "—"}</span>
+                </td>
+                <td className="hidden md:table-cell px-1.5 py-1.5 align-top">
+                  {(() => {
+                    const { assignedManagers } = assignedManagersBySiteId[site.id] ?? { assignedManagers: [] };
+                    if (assignedManagers.length === 0) {
+                      return <span className="text-[10px] text-gray-400">No assigned managers</span>;
+                    }
+                    return (
+                      <div className="flex flex-wrap gap-0.5 items-center">
+                        {assignedManagers.map((a, i) => (
+                          <span
+                            key={a.assignmentItemId ?? i}
+                            className="inline-flex items-center gap-1.5 pl-1.5 pr-0.5 py-0.5 rounded-full text-[10px] font-medium bg-gray-100 text-gray-800"
+                          >
+                            {a.managerName}
+                            <button
+                              type="button"
+                              onClick={() => handleRemoveManagerFromSite(site.siteName, a.assignmentItemId)}
+                              className="touch-target p-1 rounded hover:bg-red-100 text-red-500 hover:text-red-700 inline-flex items-center justify-center shrink-0"
+                              aria-label={`Remove ${a.managerName} from site`}
+                              title="Remove manager from site"
+                            >
+                              <X size={14} strokeWidth={2.5} />
+                            </button>
+                          </span>
+                        ))}
+                      </div>
+                    );
+                  })()}
+                </td>
+                <td className="px-2 py-2 md:px-1.5 md:py-1.5 align-top">
+                  {dayHours.length > 0 ? (
+                    <div className="grid grid-cols-7 gap-1 md:gap-px bg-[#edeef0] rounded border border-[#edeef0] overflow-hidden max-w-full md:max-w-[200px]">
+                      {dayHours.map(({ day, h }) => (
+                        <div
+                          key={day}
+                          className={`bg-white px-1.5 py-1 md:px-0.5 md:py-0.5 text-center min-w-0 ${
+                            (h ?? 0) > 0 ? "text-blue-700" : "text-gray-400"
+                          }`}
+                          title={`${day}: ${h ?? 0}h`}
+                        >
+                          <span className="block text-[9px] md:text-[8px] font-medium uppercase leading-tight text-gray-500">{day.length > 2 ? day.charAt(0) : day}</span>
+                          <span className="block text-xs md:text-[10px] font-bold tabular-nums mt-0.5">{(h ?? 0) > 0 ? Number(h) : "0"}</span>
+                        </div>
+                      ))}
+                    </div>
+                  ) : (
+                    <span className="text-[10px] text-gray-400">—</span>
+                  )}
+                </td>
+                <td className="hidden md:table-cell px-1.5 py-1.5 align-top">
+                  {budgetRate != null && budgetRate > 0 ? (
+                    <span className="text-[11px] font-medium text-gray-700">${Number(budgetRate).toFixed(2)}/hr</span>
+                  ) : (
+                    <span className="text-[10px] text-gray-400">—</span>
+                  )}
+                </td>
+                <td className="px-2 py-2 md:px-1.5 md:py-1.5 align-top whitespace-nowrap">
+                  <span className="text-sm md:text-xs font-bold text-gray-900">{fortnightCap}h</span>
+                </td>
+                {isAdmin && (
+                  <td className="px-2 py-2 md:px-1.5 md:py-1.5 align-top text-right whitespace-nowrap">
+                    <div className="flex items-center justify-end gap-1 flex-wrap">
+                      <button
+                        onClick={() => openEdit(site)}
+                        className="touch-target p-2.5 sm:p-1.5 rounded text-blue-600 hover:text-blue-800 hover:bg-blue-50 inline-flex items-center justify-center"
+                        aria-label={`Edit ${site.siteName}`}
+                        title="Edit"
+                      >
+                        <Edit3 size={18} className="sm:w-3.5 sm:h-3.5 w-[18px] h-[18px]" />
+                      </button>
+                      <button
+                        onClick={() => handleSetActive(site, !site.active)}
+                        className="touch-target p-2.5 sm:p-1.5 rounded text-gray-600 hover:text-gray-900 hover:bg-gray-100 inline-flex items-center justify-center"
+                        aria-label={site.active ? `Deactivate ${site.siteName}` : `Activate ${site.siteName}`}
+                        title={site.active ? "Deactivate" : "Activate"}
+                      >
+                        {site.active ? <UserMinus size={18} className="sm:w-3.5 sm:h-3.5 w-[18px] h-[18px]" /> : <UserPlus size={18} className="sm:w-3.5 sm:h-3.5 w-[18px] h-[18px]" />}
+                      </button>
+                      <button
+                        onClick={() => handleDeleteSite(site)}
+                        className="touch-target p-2.5 sm:p-1.5 rounded text-red-600 hover:text-red-800 hover:bg-red-50 inline-flex items-center justify-center"
+                        aria-label={`Delete ${site.siteName}`}
+                        title="Delete site"
+                      >
+                        <Trash2 size={18} className="sm:w-3.5 sm:h-3.5 w-[18px] h-[18px]" />
+                      </button>
+                    </div>
+                  </td>
+                )}
+              </tr>
             );
           })}
-          <p className="text-gray-400 text-xs flex items-center gap-1">
-            <span className="inline-block w-4 h-4 rounded bg-gray-200 flex items-center justify-center text-[10px]">i</span>
-            Daily budgets are persistent across fortnight cycles.
-          </p>
+            </tbody>
+          </table>
         </div>
+        <p className="text-gray-400 text-xs flex items-center gap-1 mt-3">
+          <span className="inline-block w-4 h-4 rounded bg-gray-200 flex items-center justify-center text-[10px]">i</span>
+          Daily budgets are persistent across fortnight cycles. Click column headers to sort.
+        </p>
+        </>
       )}
 
       {modalMode && (
@@ -857,6 +1200,24 @@ const SiteManager: React.FC<SiteManagerProps> = ({ onUpdateSite }) => {
                       />
                     </div>
                   )}
+                  <div>
+                    <label className="block text-xs font-bold text-gray-500 uppercase tracking-widest mb-1">
+                      Budget labour rate ($/hr)
+                    </label>
+                    <input
+                      type="number"
+                      min={0}
+                      step={0.5}
+                      value={budgetLabourRate}
+                      onChange={(e) => {
+                        const v = e.target.value;
+                        setBudgetLabourRate(v === "" ? "" : parseFloat(v) || 0);
+                      }}
+                      className="w-full border border-[#edeef0] rounded-lg px-3 py-2 text-sm"
+                      placeholder="e.g. 35"
+                    />
+                    <p className="text-[10px] text-gray-400 mt-1">Used for budgeted labour cost, profit margin and dashboard figures.</p>
+                  </div>
                 </div>
               </div>
 
@@ -936,23 +1297,25 @@ const SiteManager: React.FC<SiteManagerProps> = ({ onUpdateSite }) => {
                   {managers.length === 0 && (
                     <p className="text-xs text-gray-400">No managers in CleanTrack Users (Role = Manager).</p>
                   )}
-                  {managers.map((m) => (
-                    <label key={m.email} className="flex items-center gap-2 cursor-pointer">
+                  {managers.map((m) => {
+                    const isChecked = selectedManagerIdsSet.has(m.id);
+                    return (
+                    <label key={m.id} className="flex items-center gap-2 cursor-pointer">
                       <input
                         type="checkbox"
-                        checked={selectedManagerEmails.includes(m.email)}
+                        checked={isChecked}
                         onChange={(e) => {
                           if (e.target.checked) {
-                            setSelectedManagerEmails((prev) => [...prev, m.email]);
+                            setSelectedManagerIds((prev) => (prev.includes(m.id) ? prev : [...prev, m.id]));
                           } else {
-                            setSelectedManagerEmails((prev) => prev.filter((x) => x !== m.email));
+                            setSelectedManagerIds((prev) => prev.filter((id) => id !== m.id));
                           }
                         }}
                         className="rounded border-gray-300"
                       />
                       <span className="text-sm text-gray-800">{m.fullName}</span>
                     </label>
-                  ))}
+                  ); })}
                 </div>
               </div>
             </div>
@@ -1027,6 +1390,7 @@ const SiteManager: React.FC<SiteManagerProps> = ({ onUpdateSite }) => {
                         <th className="py-2 px-1 min-w-[120px]">Address</th>
                         <th className="py-2 px-1 w-20">$ Mon Rev</th>
                         <th className="py-2 px-1 w-20">$ Fort Budget</th>
+                        <th className="py-2 px-1 w-16">$/hr</th>
                         <th className="py-2 px-1 w-16">State</th>
                         <th className="py-2 px-1 w-12 text-center">Active</th>
                         <th className="py-2 px-1 w-20">Visit freq</th>
@@ -1034,7 +1398,7 @@ const SiteManager: React.FC<SiteManagerProps> = ({ onUpdateSite }) => {
                           <th key={d} className="py-2 px-0.5 w-10 text-center">{d}</th>
                         ))}
                         {DAY_KEYS.map((d) => (
-                          <th key={"w2-" + d} className="py-2 px-0.5 w-10 text-center">W2 {d}</th>
+                          <th key={"w2-" + d} className="py-2 px-0.5 w-10 text-center">{d}</th>
                         ))}
                         <th className="py-2 px-1 w-14 text-center">Hrs/visit</th>
                       </tr>
@@ -1097,6 +1461,21 @@ const SiteManager: React.FC<SiteManagerProps> = ({ onUpdateSite }) => {
                                 const v = e.target.value;
                                 updateBulkRow(row.id, { fortnightCostBudget: v === "" ? "" : parseFloat(v) || 0 });
                               }}
+                              className="w-full border border-[#edeef0] rounded px-1 py-1 text-sm"
+                              disabled={bulkSubmitLoading}
+                            />
+                          </td>
+                          <td className="py-1 px-1">
+                            <input
+                              type="number"
+                              min={0}
+                              step={0.01}
+                              value={row.budgetLabourRate === "" ? "" : row.budgetLabourRate}
+                              onChange={(e) => {
+                                const v = e.target.value;
+                                updateBulkRow(row.id, { budgetLabourRate: v === "" ? "" : parseFloat(v) || 0 });
+                              }}
+                              placeholder="—"
                               className="w-full border border-[#edeef0] rounded px-1 py-1 text-sm"
                               disabled={bulkSubmitLoading}
                             />
@@ -1206,13 +1585,13 @@ const SiteManager: React.FC<SiteManagerProps> = ({ onUpdateSite }) => {
                 <h4 className="text-xs font-bold text-gray-500 uppercase tracking-widest mb-3">Assign managers to all sites</h4>
                 <div className="space-y-2">
                   {managers.map((m) => (
-                    <label key={m.email} className="flex items-center gap-2 cursor-pointer">
+                    <label key={m.id} className="flex items-center gap-2 cursor-pointer">
                       <input
                         type="checkbox"
-                        checked={bulkManagerEmails.includes(m.email)}
+                        checked={bulkManagerIds.includes(m.id)}
                         onChange={(e) => {
-                          if (e.target.checked) setBulkManagerEmails((prev) => [...prev, m.email]);
-                          else setBulkManagerEmails((prev) => prev.filter((x) => x !== m.email));
+                          if (e.target.checked) setBulkManagerIds((prev) => [...prev, m.id]);
+                          else setBulkManagerIds((prev) => prev.filter((id) => id !== m.id));
                         }}
                         className="rounded border-gray-300"
                         disabled={bulkSubmitLoading}

@@ -201,6 +201,9 @@ export interface TimesheetEntryFlat {
   hours: number;
   siteId: string;
   cleanerId: string;
+  /** Optional display names from the Site and Cleaner lookups, used as a fallback join key if ids drift. */
+  siteName?: string;
+  cleanerName?: string;
   pay_rate_snapshot?: number;
   adhocJobId?: string;
   adhocJobName?: string;
@@ -216,16 +219,19 @@ export async function getTimesheetEntriesForRange(
   const cleanersListId = await sharepoint.getListIdByName(accessToken, siteId, CLEANERS_LIST_NAME);
   if (!timesheetsListId) return [];
 
-  const [timesheetItems, cleanerItems] = await Promise.all([
+  const [timesheetItems, cleanerItems, timesheetColumns] = await Promise.all([
     sharepoint.getListItems(accessToken, siteId, timesheetsListId),
     cleanersListId ? sharepoint.getListItems(accessToken, siteId, cleanersListId) : [],
+    sharepoint.getListColumns(accessToken, siteId, timesheetsListId),
   ]);
 
-  const timesheetColumns = await sharepoint.getListColumns(accessToken, siteId, timesheetsListId);
   const tsMap: Record<string, string> = {};
   for (const c of timesheetColumns) {
     if (c.displayName) tsMap[c.displayName] = c.name;
   }
+  const workDateInternal =
+    tsMap["Work Date"] ?? "WorkDate" ?? "Work_x0020_Date";
+  const hoursInternal = tsMap["Hours"] ?? "Hours";
   const adHocJobCol = tsMap["Ad Hoc Job"] ?? "Ad_x0020_Hoc_x0020_Job";
   const adHocJobIdKey = `${adHocJobCol}LookupId`;
   const adHocJobNameKey = adHocJobCol;
@@ -246,20 +252,29 @@ export async function getTimesheetEntriesForRange(
     }
   }
 
-  const workDateKey = "Work Date";
-  const hoursKey = "Hours";
+  const workDateKey = workDateInternal;
+  const hoursKey = hoursInternal;
   const result: TimesheetEntryFlat[] = [];
 
   for (const item of timesheetItems) {
     const f = (item.fields ?? {}) as Record<string, unknown>;
-    const workDate = toDate(f[workDateKey] ?? f["WorkDate"]);
+    const rawWorkDate = f[workDateKey] ?? f["WorkDate"];
+    const workDate = toDate(rawWorkDate);
     if (!workDate || !dateInRange(workDate, range)) continue;
     const hours = toNum(f[hoursKey] ?? f["Hours"]);
-    const { id: siteIdVal } = getLookupIdOrName(f, "Site");
-    const { id: cleanerIdVal } = getLookupIdOrName(f, "Cleaner");
-    if (!siteIdVal || !cleanerIdVal) continue;
+    const { id: siteIdRaw, name: siteNameRaw } = getLookupIdOrName(f, "Site");
+    const { id: cleanerIdRaw, name: cleanerNameRaw } = getLookupIdOrName(f, "Cleaner");
+    if (!siteIdRaw || !cleanerIdRaw) continue;
+    // Normalize lookup ids so they match app-level site.id / cleaner.id (Graph may return path-style ids).
+    const siteIdVal = sharepoint.normalizeListItemId(siteIdRaw);
+    const cleanerIdVal = sharepoint.normalizeListItemId(cleanerIdRaw);
     const rate = cleanerRateMap[cleanerIdVal] ?? 0;
-    const dateStr = workDate.toISOString().slice(0, 10);
+    // Use the raw SharePoint date string (first 10 chars) to avoid timezone shifts,
+    // falling back to the ISO date only if needed.
+    const dateStr =
+      typeof rawWorkDate === "string" && rawWorkDate.length >= 10
+        ? rawWorkDate.slice(0, 10)
+        : workDate.toISOString().slice(0, 10);
     const adhocJobIdVal = f[adHocJobIdKey] != null ? String(f[adHocJobIdKey]).trim() : "";
     let adhocJobNameVal = "";
     const ahVal = f[adHocJobNameKey];
@@ -274,8 +289,12 @@ export async function getTimesheetEntriesForRange(
       hours,
       siteId: siteIdVal,
       cleanerId: cleanerIdVal,
+      siteName: siteNameRaw || undefined,
+      cleanerName: cleanerNameRaw || undefined,
       pay_rate_snapshot: rate || undefined,
-      ...(adhocJobIdVal ? { adhocJobId: adhocJobIdVal, adhocJobName: adhocJobNameVal || undefined } : {}),
+      ...(adhocJobIdVal
+        ? { adhocJobId: adhocJobIdVal, adhocJobName: adhocJobNameVal || undefined }
+        : {}),
     });
   }
   if (typeof process !== "undefined" && process.env?.NODE_ENV === "development" && result.length > 0) {
@@ -328,6 +347,7 @@ export async function saveTimesheetEntriesToSharePoint(
   }
 
   let saved = 0;
+  const errors: string[] = [];
   for (const entry of entries) {
     const key = `${entry.siteId}|${entry.cleanerId}|${entry.date}`;
     const existingId = keyToId.get(key);
@@ -343,6 +363,15 @@ export async function saveTimesheetEntriesToSharePoint(
       if (existingId) {
         const updateFields: Record<string, unknown> = { [hoursKey]: entry.hours };
         if (adHocJobKey) updateFields[adHocJobKey] = adHocLookupVal;
+        if (typeof console !== "undefined") {
+          console.log("[Timesheets Save] PATCH entry", {
+            id: existingId,
+            workDate,
+            hours: entry.hours,
+            siteId: entry.siteId,
+            cleanerId: entry.cleanerId,
+          });
+        }
         await sharepoint.updateListItem(accessToken, siteId, listId, existingId, updateFields);
       } else {
         const createFields: Record<string, unknown> = {
@@ -352,13 +381,30 @@ export async function saveTimesheetEntriesToSharePoint(
           [cleanerKey]: cleanerLookupVal,
         };
         if (adHocJobKey && adHocLookupVal != null) createFields[adHocJobKey] = adHocLookupVal;
+        if (typeof console !== "undefined") {
+          console.log("[Timesheets Save] POST entry", {
+            workDate,
+            hours: entry.hours,
+            siteId: entry.siteId,
+            cleanerId: entry.cleanerId,
+          });
+        }
         await sharepoint.createListItem(accessToken, siteId, listId, createFields);
       }
       saved++;
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
-      return { saved, error: msg };
+      const ctx = `date=${workDate}, siteId=${entry.siteId}, cleanerId=${entry.cleanerId}`;
+      const full = `[Timesheets Save] Failed for ${ctx}: ${msg}`;
+      if (typeof console !== "undefined") {
+        console.error(full);
+      }
+      errors.push(full);
+      // continue with other entries so partial saves still go through
     }
+  }
+  if (errors.length > 0) {
+    return { saved, error: errors.join(" | ") };
   }
   return { saved };
 }

@@ -1,0 +1,205 @@
+/* Slate Ops theme tokens & primitives */
+:root {
+  /* Surfaces */
+  --so-app-bg: #F6F7F8;
+  --so-page-surface: #FFFFFF;
+  --so-elevated-surface: #FCFCFD;
+
+  /* Sidebar */
+  --so-sidebar-bg: #111827;
+  --so-sidebar-secondary: #1F2937;
+
+  /* Text */
+  --so-text-primary: #111827;
+  --so-text-secondary: #6B7280;
+  --so-text-muted: #9CA3AF;
+
+  /* Borders */
+  --so-border-subtle: #E5E7EB;
+  --so-border-strong: #D1D5DB;
+
+  /* Accent */
+  --so-accent: #3E5F6A;
+  --so-accent-hover: #35515A;
+  --so-accent-soft: #ECF3F4;
+
+  /* Status */
+  --so-success: #166534;
+  --so-success-soft: #DCFCE7;
+  --so-warning: #92400E;
+  --so-warning-soft: #FEF3C7;
+  --so-danger: #B91C1C;
+  --so-danger-soft: #FEE2E2;
+  --so-info-soft: #E0F2FE;
+
+  /* Radius */
+  --so-radius-card: 16px;
+  --so-radius-input: 10px;
+  --so-radius-modal: 16px;
+}
+
+body {
+  background-color: var(--so-app-bg);
+  color: var(--so-text-primary);
+}
+
+/* App shell layout helper */
+.so-app-shell {
+  background-color: var(--so-app-bg);
+  color: var(--so-text-primary);
+}
+
+/* Sidebar */
+.so-sidebar {
+  background-color: var(--so-sidebar-bg);
+  color: #E5E7EB;
+}
+
+.so-sidebar-header {
+  background: linear-gradient(135deg, #111827 0%, #111827 40%, #1F2937 100%);
+}
+
+.so-sidebar-nav-item {
+  border-radius: 10px;
+}
+
+.so-sidebar-nav-item--active {
+  background-color: var(--so-sidebar-secondary);
+  border: 1px solid rgba(148, 163, 184, 0.45);
+}
+
+/* Cards */
+.so-card {
+  background-color: var(--so-page-surface);
+  border-radius: var(--so-radius-card);
+  border: 1px solid var(--so-border-subtle);
+  box-shadow: 0 10px 24px rgba(15, 23, 42, 0.05);
+}
+
+.so-card-soft {
+  background-color: var(--so-elevated-surface);
+  border-radius: var(--so-radius-card);
+  border: 1px solid var(--so-border-subtle);
+  box-shadow: 0 8px 20px rgba(15, 23, 42, 0.035);
+}
+
+.so-card,
+.so-card-soft {
+  transition:
+    box-shadow 150ms ease,
+    transform 150ms ease,
+    background-color 150ms ease,
+    border-color 150ms ease;
+}
+
+.so-card:hover,
+.so-card-soft:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 12px 28px rgba(15, 23, 42, 0.06);
+}
+
+/* Tables */
+.so-table {
+  background-color: var(--so-page-surface);
+  border-radius: 14px;
+  border: 1px solid var(--so-border-subtle);
+  box-shadow: 0 6px 14px rgba(15, 23, 42, 0.02);
+}
+
+.so-table thead tr {
+  background-color: #F3F4F6;
+}
+
+.so-table tbody tr:hover {
+  background-color: #F3F4F6;
+}
+
+.so-table th {
+  padding-top: 0.6rem;
+  padding-bottom: 0.6rem;
+  font-weight: 600;
+  color: #111827;
+}
+
+.so-table td {
+  padding-top: 0.6rem;
+  padding-bottom: 0.6rem;
+}
+
+/* Inputs */
+.so-input {
+  border-radius: var(--so-radius-input);
+  border: 1px solid var(--so-border-subtle);
+}
+
+.so-input:focus {
+  outline: none;
+  border-color: var(--so-accent);
+  box-shadow: 0 0 0 1px rgba(62, 95, 106, 0.25);
+}
+
+/* Buttons */
+.so-btn-primary {
+  border-radius: var(--so-radius-input);
+  background-color: var(--so-accent);
+  color: #ffffff;
+  border: 1px solid transparent;
+}
+
+.so-btn-primary:hover {
+  background-color: var(--so-accent-hover);
+}
+
+.so-btn-secondary {
+  border-radius: var(--so-radius-input);
+  background-color: #ffffff;
+  color: var(--so-text-primary);
+  border: 1px solid var(--so-border-strong);
+}
+
+.so-btn-secondary:hover {
+  background-color: #F9FAFB;
+}
+
+.so-btn-ghost {
+  border-radius: var(--so-radius-input);
+  background-color: transparent;
+  color: var(--so-text-secondary);
+}
+
+/* Badges */
+.so-badge-muted {
+  border-radius: 999px;
+  background-color: #F3F4F6;
+  color: #4B5563;
+}
+
+.so-badge-success {
+  border-radius: 999px;
+  background-color: var(--so-success-soft);
+  color: var(--so-success);
+}
+
+.so-badge-warning {
+  border-radius: 999px;
+  background-color: var(--so-warning-soft);
+  color: var(--so-warning);
+}
+
+.so-badge-danger {
+  border-radius: 999px;
+  background-color: var(--so-danger-soft);
+  color: var(--so-danger);
+}
+
+/* Page header */
+.so-page-header {
+  margin-bottom: 1.75rem;
+}
+
+@media (min-width: 640px) {
+  .so-page-header {
+    margin-bottom: 3rem;
+  }
+}
+

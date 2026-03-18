@@ -15,7 +15,11 @@ Order columns in the list like this. Grouping makes it easy to scan and to build
 | 3     | Active                     | Yes/No     | Always            |
 | 4     | **Visit Frequency**        | **Choice** | Always            |
 | 5     | **Hours per Visit**         | **Number** | Monthly only      |
-| 5a    | **Budget Labour Rate**    | **Number** | Optional; hourly rate ($/hr) for budgeted labour, used for dashboard labour and margin |
+| 5a    | **Weekday Labour Rate**   | **Number or Currency** | Optional; hourly rate ($/hr) for Mon–Fri. Used for budgeted labour cost and dashboard. (Renamed from former "Budget Labour Rate".) |
+| 5a2   | **Saturday Labour Rate** | **Number or Currency** | Optional; hourly rate ($/hr) for Saturday. |
+| 5a3   | **Sunday Labour Rate**   | **Number or Currency** | Optional; hourly rate ($/hr) for Sunday. |
+| 5a4   | **PH Labour Rate**       | **Number or Currency** | Optional; hourly rate ($/hr) for public holidays. |
+| 5b    | **Fortnight Cost Budget**  | **Number or Currency** | Optional; dollar cap per fortnight (e.g. 3125). Edit Site form reads/writes this. |
 | 6     | Monday Hours               | Number     | Weekly / Fortnightly (Week 1) |
 | 7     | Tuesday Hours              | Number     | "                 |
 | 8     | Wednesday Hours            | Number     | "                 |
@@ -47,9 +51,10 @@ Default can be **Weekly**.
 
 ---
 
-## 3. Number columns
+## 3. Number and Currency columns
 
-- **Hours per Visit**, **Budget Labour Rate**, and all **Hours** columns: use **Number** with 2 decimal places (or more if you need it).
+- **Hours per Visit** and all **Hours** columns: use **Number** with 2 decimal places (or more if you need it).
+- **Weekday Labour Rate**, **Saturday Labour Rate**, **Sunday Labour Rate**, **PH Labour Rate**, and **Fortnight Cost Budget**: use **Number** or **Currency** (2 decimal places). The app reads and writes the numeric value; Currency type in SharePoint is supported.
 - Allow zero; no need to require a value (the app will write 0 when not used).
 
 ---

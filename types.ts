@@ -19,8 +19,13 @@ export interface Site {
   monthly_revenue: number;
   financial_budget: number;
   cleaner_rates: Record<string, number>;
-  /** Hourly rate for budgeted labour at this site ($/hr). From CleanTrack Site Budgets. */
+  /** Weekday (Mon–Fri) rate ($/hr). From "Weekday Labour Rate" (was Budget Labour Rate). Backward compat. */
   budget_labour_rate?: number;
+  /** Labour rates by day type ($/hr). From CleanTrack Site Budgets: Weekday Labour Rate, Saturday Labour Rate, Sunday Labour Rate, PH Labour Rate. */
+  budget_weekday_labour_rate?: number;
+  budget_saturday_labour_rate?: number;
+  budget_sunday_labour_rate?: number;
+  budget_ph_labour_rate?: number;
   managers?: Profile[]; // Joined data
   /** Weekly | Fortnightly | Monthly – from site budget */
   visit_frequency?: string;
@@ -66,18 +71,28 @@ export interface TimeBatch {
   entries?: TimeEntry[];
 }
 
-/** Ad Hoc Job from CleanTrack Ad Hoc Jobs list. */
+/** Ad Hoc Job from CleanTrack Ad Hoc Jobs list (new schema). */
 export interface AdHocJob {
   id: string;
+  /** SharePoint Title, surfaced as Job Name. */
   jobName: string;
+  /**
+   * Stored in SharePoint "Job Type" for backward compatibility.
+   * App semantics: schedule type = "Once Off" | "Recurring".
+   */
   jobType: string;
+  companyName: string;
+  clientName: string;
   siteId: string | null;
   siteName: string;
+  /** When no linked site exists, allow a manual/unlisted name. */
+  manualSiteName?: string;
+  /** Optional address for manual/unlisted site. */
+  manualSiteAddress?: string;
+  description: string;
   requestedByName: string;
   requestedByEmail: string;
-  requestedByCompany: string;
   requestChannel: string;
-  requestSummary: string;
   requestedDate: string | null;
   assignedManagerId: string | null;
   assignedManagerName: string;
@@ -85,13 +100,48 @@ export interface AdHocJob {
   completedDate: string | null;
   status: string;
   budgetedHours: number | null;
-  budgetedLabourRate: number | null;
-  budgetedRevenue: number | null;
-  description: string;
-  approvalProofRequired: boolean;
+  actualHours: number | null;
+  serviceProvider: string;
+  chargeRatePerHour: number | null;
+  costRatePerHour: number | null;
+  charge: number | null;
+  cost: number | null;
+  grossProfit: number | null;
+  markupPercent: number | null;
+  gpPercent: number | null;
   approvalProofUploaded: boolean;
-  approvalReferenceNotes: string;
+  approvalReference: string;
+  notesForInformation: string;
   active: boolean;
+
+  /** Recurring schedule fields (optional; only used when Schedule Type = Recurring). */
+  recurrenceFrequency?: 'Weekly' | 'Fortnightly' | 'Monthly' | null;
+  /** Commencement/start date (yyyy-MM-dd). We reuse `scheduledDate` as the start date for recurring jobs. */
+  recurrenceStartDate?: string | null;
+  recurrenceEndDate?: string | null;
+  /** Legacy: single hours-per-day (kept for backward compatibility). */
+  hoursPerServiceDay?: number | null;
+  /** Selected weekdays for weekly/fortnightly recurrence. 0=Sun..6=Sat. */
+  recurrenceWeekdays?: number[] | null;
+  /** Per-weekday hours for weekly/fortnightly. Keys are day indexes 0..6. */
+  weekdayHours?: Record<string, number> | null;
+  /** Monthly configuration. */
+  monthlyMode?: 'day_of_month' | 'nth_weekday' | null;
+  monthlyDayOfMonth?: number | null;
+  monthlyWeekOfMonth?: 'First' | 'Second' | 'Third' | 'Fourth' | 'Last' | null;
+  monthlyWeekday?: number | null; // 0=Sun..6=Sat
+  /** Hours for monthly occurrence (day-of-month or nth-weekday). */
+  monthlyHours?: number | null;
+
+  /** Optional day-type rate overrides (fixed rates, not multipliers). */
+  weekdayChargeRateOverride?: number | null;
+  saturdayChargeRateOverride?: number | null;
+  sundayChargeRateOverride?: number | null;
+  publicHolidayChargeRateOverride?: number | null;
+  weekdayCostRateOverride?: number | null;
+  saturdayCostRateOverride?: number | null;
+  sundayCostRateOverride?: number | null;
+  publicHolidayCostRateOverride?: number | null;
   /** Placeholder for future attachment support. */
   attachmentCount?: number;
 }
@@ -102,4 +152,24 @@ export interface FortnightPeriod {
   id: string;
 }
 
-export type ViewType = 'dashboard' | 'sites' | 'team' | 'cleaners' | 'timesheets' | 'insights' | 'adhoc-jobs' | 'site-detail' | 'auth-test';
+/** Assignment of a cleaner to a site (from CleanTrack Site Cleaners). */
+export interface SiteCleanerAssignment {
+  id: string;
+  assignmentName: string;
+  siteId: string;
+  siteName: string;
+  cleanerId: string;
+  cleanerName: string;
+  active: boolean;
+}
+
+export type ViewType =
+  | 'dashboard'
+  | 'sites'
+  | 'team'
+  | 'cleaners'
+  | 'timesheets'
+  | 'insights'
+  | 'adhoc-jobs'
+  | 'site-detail'
+  | 'auth-test';

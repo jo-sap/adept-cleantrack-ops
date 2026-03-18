@@ -1,6 +1,6 @@
-import React, { useState, useEffect, useCallback } from "react";
+import React, { useState, useEffect, useCallback, useMemo } from "react";
 import { Cleaner } from "../types";
-import { Plus, CreditCard, X, UserCircle, Search, Loader2, Layers, Trash2, Pencil, UserMinus, UserPlus } from "lucide-react";
+import { Plus, CreditCard, X, UserCircle, Search, Loader2, Layers, Trash2, Pencil, UserMinus, UserPlus, ChevronUp, ChevronDown } from "lucide-react";
 import { useRole } from "../contexts/RoleContext";
 import { useAppAuth } from "../contexts/AppAuthContext";
 import { getGraphAccessToken } from "../lib/graph";
@@ -12,6 +12,11 @@ import {
   type CleanerItem,
   type CleanerPayload,
 } from "../repositories/cleanersRepo";
+import {
+  getSiteCleanerAssignments,
+  type SiteCleanerAssignment,
+} from "../repositories/assignedCleanersRepo";
+import { getSites, type Site } from "../repositories/sitesRepo";
 
 const WRITE_PERMISSION_HINT =
   "Admin consent may be required for Sites.ReadWrite.All or Lists.ReadWrite.All.";
@@ -52,7 +57,8 @@ interface BulkCleanerRow {
 const CleanerManager: React.FC<CleanerManagerProps> = ({ onCleanersRefresh }) => {
   const { isAdmin: isAdminFromRole } = useRole();
   const { user } = useAppAuth();
-  const isAdmin = isAdminFromRole || user?.role === "Admin";
+  // Managers should have the same CRUD capabilities as Admin for cleaners onboarding.
+  const canManageCleaners = isAdminFromRole || user?.role === "Admin" || user?.role === "Manager";
 
   const [cleaners, setCleaners] = useState<CleanerItem[]>([]);
   const [loading, setLoading] = useState(true);
@@ -78,6 +84,34 @@ const CleanerManager: React.FC<CleanerManagerProps> = ({ onCleanersRefresh }) =>
   const [selectedCleanerIds, setSelectedCleanerIds] = useState<string[]>([]);
   const [bulkDeleteLoading, setBulkDeleteLoading] = useState(false);
 
+  const [assignmentsByCleanerId, setAssignmentsByCleanerId] = useState<Record<string, SiteCleanerAssignment[]>>({});
+  const [hoverCleanerId, setHoverCleanerId] = useState<string | null>(null);
+  const [hoverPopover, setHoverPopover] = useState<{
+    cleanerId: string;
+    left: number;
+    top: number;
+  } | null>(null);
+  const [isHoverPopoverOver, setIsHoverPopoverOver] = useState(false);
+  const [modalCleaner, setModalCleaner] = useState<CleanerItem | null>(null);
+  const [modalAssignments, setModalAssignments] = useState<SiteCleanerAssignment[]>([]);
+  const [sitesById, setSitesById] = useState<Record<string, Site>>({});
+
+  type CleanerSortKey = "name" | "status" | "rate";
+  const [cleanerSortBy, setCleanerSortBy] = useState<CleanerSortKey>("name");
+
+  /** Resolve site display name from assignment (lookup) or fallback join to CleanTrack Sites. */
+  const resolveSiteDisplayName = useCallback(
+    (a: SiteCleanerAssignment, sites: Record<string, Site>): string => {
+      if (a.siteName && String(a.siteName).trim()) return String(a.siteName).trim();
+      const site = (a.siteId && sites[String(a.siteId)]) || (a.siteId && sites[a.siteId as unknown as string]);
+      if (site?.siteName) return site.siteName;
+      if (site?.address) return site.address;
+      return "";
+    },
+    []
+  );
+  const [cleanerSortDir, setCleanerSortDir] = useState<"asc" | "desc">("asc");
+
   const showToast = useCallback((msg: string) => {
     setToast(msg);
     setTimeout(() => setToast(null), 4000);
@@ -94,8 +128,43 @@ const CleanerManager: React.FC<CleanerManagerProps> = ({ onCleanersRefresh }) =>
     setLoading(true);
     setError(null);
     try {
-      const data = await getCleaners(token);
+      const [data, assignments, sites] = await Promise.all([
+        getCleaners(token),
+        getSiteCleanerAssignments(token, { activeOnly: true }),
+        getSites(token).catch(() => [] as Site[]),
+      ]);
+
+      // Debug: raw assignments and grouped counts
+      console.log("[CleanerManager] site-cleaner assignments (active only) sample:", {
+        total: assignments.length,
+        first: assignments[0],
+      });
+
+      const grouped: Record<string, SiteCleanerAssignment[]> = {};
+      for (const a of assignments) {
+        if (!a.cleanerId || !a.active) continue;
+        if (!grouped[a.cleanerId]) grouped[a.cleanerId] = [];
+        grouped[a.cleanerId].push(a);
+      }
+      console.log("[CleanerManager] assignments grouped by cleaner:", {
+        cleanerCount: Object.keys(grouped).length,
+      });
+
+      if (sites.length > 0) {
+        console.log("[CleanerManager] sample CleanTrack Sites for fallback join:", {
+          count: sites.length,
+          first: sites[0],
+        });
+      }
+
       setCleaners(data);
+      setAssignmentsByCleanerId(grouped);
+      setSitesById(
+        sites.reduce<Record<string, Site>>((acc, s) => {
+          acc[String(s.id)] = s;
+          return acc;
+        }, {})
+      );
     } catch (e) {
       const msg = e instanceof Error ? e.message : "Failed to load cleaners.";
       setError(msg);
@@ -312,6 +381,41 @@ const CleanerManager: React.FC<CleanerManagerProps> = ({ onCleanersRefresh }) =>
     }
   };
 
+  const filteredCleaners = cleaners.filter((c) =>
+    c.cleanerName.toLowerCase().includes(searchQuery.toLowerCase().trim())
+  );
+
+  const sortedCleaners = useMemo(() => {
+    const list = [...filteredCleaners];
+    list.sort((a, b) => {
+      let cmp = 0;
+      if (cleanerSortBy === "name") {
+        const an = a.cleanerName.toLowerCase();
+        const bn = b.cleanerName.toLowerCase();
+        cmp = an.localeCompare(bn);
+      } else if (cleanerSortBy === "status") {
+        const av = a.active ? 1 : 0;
+        const bv = b.active ? 1 : 0;
+        cmp = av - bv;
+      } else if (cleanerSortBy === "rate") {
+        const ar = a.payRatePerHour ?? 0;
+        const br = b.payRatePerHour ?? 0;
+        cmp = ar - br;
+      }
+      return cleanerSortDir === "asc" ? cmp : -cmp;
+    });
+    return list;
+  }, [filteredCleaners, cleanerSortBy, cleanerSortDir]);
+
+  const handleCleanerSort = (key: CleanerSortKey) => {
+    if (cleanerSortBy === key) {
+      setCleanerSortDir((d) => (d === "asc" ? "desc" : "asc"));
+    } else {
+      setCleanerSortBy(key);
+      setCleanerSortDir(key === "name" ? "asc" : "desc");
+    }
+  };
+
   const selectedSet = new Set(selectedCleanerIds);
   const toggleSelected = (id: string) => {
     setSelectedCleanerIds((prev) =>
@@ -370,10 +474,6 @@ const CleanerManager: React.FC<CleanerManagerProps> = ({ onCleanersRefresh }) =>
     }
   };
 
-  const filteredCleaners = cleaners.filter((c) =>
-    c.cleanerName.toLowerCase().includes(searchQuery.toLowerCase().trim())
-  );
-
   return (
     <div className="space-y-6 sm:space-y-8 animate-fadeIn">
       <div className="flex flex-col sm:flex-row sm:justify-between sm:items-end gap-4 border-b border-[#edeef0] pb-4">
@@ -381,7 +481,7 @@ const CleanerManager: React.FC<CleanerManagerProps> = ({ onCleanersRefresh }) =>
           <h2 className="text-2xl sm:text-3xl font-bold text-gray-900">Cleaner Team</h2>
           <p className="text-gray-500 text-sm mt-1">Manage personnel, onboarding details, and banking records.</p>
         </div>
-        {isAdmin && (
+        {canManageCleaners && (
           <div className="flex items-center gap-2 flex-shrink-0">
             <button
               onClick={handleOpenBulk}
@@ -411,7 +511,7 @@ const CleanerManager: React.FC<CleanerManagerProps> = ({ onCleanersRefresh }) =>
         />
       </div>
 
-      {isAdmin && selectedCleanerIds.length > 0 && (
+      {canManageCleaners && selectedCleanerIds.length > 0 && (
         <div className="sticky top-12 z-20 flex flex-wrap items-center gap-2 py-2 px-3 bg-amber-50 border border-amber-200 rounded-lg shadow-sm">
           <span className="text-sm font-medium text-amber-800">
             {selectedCleanerIds.length} selected
@@ -435,9 +535,110 @@ const CleanerManager: React.FC<CleanerManagerProps> = ({ onCleanersRefresh }) =>
         </div>
       )}
 
+      {modalCleaner && (
+        <div className="fixed inset-0 bg-gray-900/60 backdrop-blur-sm z-[120] flex items-center justify-center p-4">
+          <div className="bg-white w-full max-w-lg rounded-2xl shadow-2xl overflow-hidden">
+            <div className="p-5 border-b border-[#edeef0] flex justify-between items-center bg-[#fcfcfb]">
+              <div className="min-w-0">
+                <h3 className="font-semibold text-gray-900 truncate">
+                  {modalCleaner.cleanerName} — Assigned Sites
+                </h3>
+                <p className="text-[12px] text-gray-500 mt-0.5">
+                  {modalAssignments.length} active site
+                  {modalAssignments.length === 1 ? "" : "s"}
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => {
+                  setModalCleaner(null);
+                  setModalAssignments([]);
+                }}
+                className="text-gray-400 hover:text-gray-900 transition-colors"
+                aria-label="Close assigned sites"
+              >
+                <X size={20} />
+              </button>
+            </div>
+            <div className="p-5 max-h-[60vh] overflow-y-auto">
+              {modalAssignments.length === 0 ? (
+                <p className="text-sm text-gray-500">
+                  No active site assignments for this cleaner.
+                </p>
+              ) : (
+                <ul className="space-y-2 text-sm">
+                  {modalAssignments.map((a) => (
+                    <li
+                      key={a.id}
+                      className="flex items-start gap-2 border-b border-[#edeef0] last:border-b-0 pb-2"
+                    >
+                      <span className="mt-0.5 text-[10px] text-gray-400">•</span>
+                      <div>
+                        <p className="font-medium text-gray-900">
+                          {resolveSiteDisplayName(a, sitesById) || "Unnamed site"}
+                        </p>
+                      </div>
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
       {toast && (
         <div className="bg-green-50 border border-green-200 text-green-800 px-4 py-2 rounded-lg text-sm">
           {toast}
+        </div>
+      )}
+
+      {hoverCleanerId && hoverPopover && (
+        <div
+          className="fixed z-[200] w-64 so-card bg-white p-3 text-xs shadow-lg"
+          style={{ left: hoverPopover.left, top: hoverPopover.top }}
+          onMouseEnter={() => setIsHoverPopoverOver(true)}
+          onMouseLeave={() => {
+            setIsHoverPopoverOver(false);
+            setHoverCleanerId(null);
+            setHoverPopover(null);
+          }}
+        >
+          {(() => {
+            const assignments = assignmentsByCleanerId[hoverCleanerId] ?? [];
+            const names = assignments
+              .map((a) => resolveSiteDisplayName(a, sitesById))
+              .filter((n) => !!n);
+            const preview = names.slice(0, 6);
+            const remaining = Math.max(names.length - preview.length, 0);
+            return (
+              <>
+                <p className="text-[11px] font-semibold text-gray-800 mb-1">
+                  Assigned Sites
+                </p>
+                {assignments.length === 0 ? (
+                  <p className="text-[11px] text-gray-500">
+                    No active site assignments
+                  </p>
+                ) : preview.length === 0 ? (
+                  <p className="text-[11px] text-gray-500">
+                    Assigned sites found, but site names are missing from lookup fields.
+                  </p>
+                ) : (
+                  <ul className="space-y-0.5 text-gray-700">
+                    {preview.map((name) => (
+                      <li key={name} className="truncate">
+                        • {name}
+                      </li>
+                    ))}
+                    {remaining > 0 && (
+                      <li className="text-gray-500">+{remaining} more</li>
+                    )}
+                  </ul>
+                )}
+              </>
+            );
+          })()}
         </div>
       )}
 
@@ -455,21 +656,22 @@ const CleanerManager: React.FC<CleanerManagerProps> = ({ onCleanersRefresh }) =>
         </div>
       ) : (
         <div className="border border-[#edeef0] rounded-lg bg-white shadow-sm overflow-hidden table-scroll-mobile">
-          <table className="w-full border-collapse text-left table-fixed min-w-[700px]">
+          <table className="w-full border-collapse text-left table-fixed min-w-[760px]">
             <colgroup>
-              {isAdmin && <col style={{ width: '4%' }} />}
-              <col style={{ width: isAdmin ? '5%' : '6%' }} />
-              <col style={{ width: isAdmin ? '22%' : '26%' }} />
+              {canManageCleaners && <col style={{ width: '4%' }} />}
+              <col style={{ width: canManageCleaners ? '5%' : '6%' }} />
+              <col style={{ width: canManageCleaners ? '22%' : '26%' }} />
               <col style={{ width: '8%' }} />
               <col style={{ width: '8%' }} />
-              <col style={{ width: isAdmin ? '22%' : '26%' }} />
+              <col style={{ width: canManageCleaners ? '18%' : '22%' }} />
+              <col style={{ width: '10%' }} />
               <col style={{ width: '8%' }} />
               <col style={{ width: '11%' }} />
-              {isAdmin && <col style={{ width: '12%' }} />}
+              {canManageCleaners && <col style={{ width: '12%' }} />}
             </colgroup>
             <thead>
               <tr className="bg-[#fcfcfb] border-b border-[#edeef0]">
-                {isAdmin && (
+                {canManageCleaners && (
                   <th className="px-1.5 py-1.5 w-10">
                     <input
                       type="checkbox"
@@ -481,24 +683,74 @@ const CleanerManager: React.FC<CleanerManagerProps> = ({ onCleanersRefresh }) =>
                   </th>
                 )}
                 <th className="px-1.5 py-1.5 w-12"></th>
-                <th className="px-1.5 py-1.5 text-[9px] font-bold text-gray-500 uppercase tracking-widest">Name</th>
-                <th className="px-1.5 py-1.5 text-[9px] font-bold text-gray-500 uppercase tracking-widest">Status</th>
-                <th className="px-1.5 py-1.5 text-[9px] font-bold text-gray-500 uppercase tracking-widest">Rate</th>
+                <th className="px-1.5 py-1.5">
+                  <button
+                    type="button"
+                    onClick={() => handleCleanerSort("name")}
+                    className="text-[9px] font-bold text-gray-500 uppercase tracking-widest flex items-center gap-0.5 hover:text-gray-900 focus:outline-none focus:ring-2 focus:ring-gray-900/20 rounded"
+                  >
+                    Name
+                    {cleanerSortBy === "name" &&
+                      (cleanerSortDir === "asc" ? (
+                        <ChevronUp size={10} />
+                      ) : (
+                        <ChevronDown size={10} />
+                      ))}
+                  </button>
+                </th>
+                <th className="px-1.5 py-1.5">
+                  <button
+                    type="button"
+                    onClick={() => handleCleanerSort("status")}
+                    className="text-[9px] font-bold text-gray-500 uppercase tracking-widest inline-flex items-center gap-0.5 hover:text-gray-900 focus:outline-none focus:ring-2 focus:ring-gray-900/20 rounded"
+                  >
+                    Status
+                    {cleanerSortBy === "status" &&
+                      (cleanerSortDir === "asc" ? (
+                        <ChevronUp size={10} />
+                      ) : (
+                        <ChevronDown size={10} />
+                      ))}
+                  </button>
+                </th>
+                <th className="px-1.5 py-1.5">
+                  <button
+                    type="button"
+                    onClick={() => handleCleanerSort("rate")}
+                    className="text-[9px] font-bold text-gray-500 uppercase tracking-widest inline-flex items-center gap-0.5 hover:text-gray-900 focus:outline-none focus:ring-2 focus:ring-gray-900/20 rounded"
+                  >
+                    Rate
+                    {cleanerSortBy === "rate" &&
+                      (cleanerSortDir === "asc" ? (
+                        <ChevronUp size={10} />
+                      ) : (
+                        <ChevronDown size={10} />
+                      ))}
+                  </button>
+                </th>
                 <th className="px-1.5 py-1.5 text-[9px] font-bold text-gray-500 uppercase tracking-widest">Account name</th>
                 <th className="px-1.5 py-1.5 text-[9px] font-bold text-gray-500 uppercase tracking-widest">BSB</th>
                 <th className="px-1.5 py-1.5 text-[9px] font-bold text-gray-500 uppercase tracking-widest">Account no.</th>
-                {isAdmin && <th className="px-1.5 py-1.5 text-[9px] font-bold text-gray-500 uppercase tracking-widest text-right">Actions</th>}
+                <th className="px-1.5 py-1.5 text-[9px] font-bold text-gray-500 uppercase tracking-widest">Sites Assigned</th>
+                {canManageCleaners && <th className="px-1.5 py-1.5 text-[9px] font-bold text-gray-500 uppercase tracking-widest text-right">Actions</th>}
               </tr>
             </thead>
             <tbody>
-              {filteredCleaners.map((cleaner) => {
+              {sortedCleaners.map((cleaner) => {
                 const appCleaner = toAppCleaner(cleaner);
+                const assignments = assignmentsByCleanerId[cleaner.id] ?? [];
+                const assignedSiteCount = assignments.length;
+                const assignedSiteNames = assignments
+                  .map((a) => resolveSiteDisplayName(a, sitesById))
+                  .filter((n) => !!n);
+                const previewNames = assignedSiteNames.slice(0, 4);
+                const remaining = Math.max(assignedSiteNames.length - previewNames.length, 0);
                 return (
                   <tr
                     key={cleaner.id}
                     className="border-b border-[#edeef0] last:border-b-0 hover:bg-[#f7f6f3] transition-colors"
                   >
-                    {isAdmin && (
+                    {canManageCleaners && (
                       <td className="px-1.5 py-1.5">
                         <input
                           type="checkbox"
@@ -524,7 +776,7 @@ const CleanerManager: React.FC<CleanerManagerProps> = ({ onCleanersRefresh }) =>
                       </span>
                     </td>
                     <td className="px-1.5 py-1.5">
-                      <span className="text-[11px] font-semibold text-green-600">${cleaner.payRatePerHour || 0}/hr</span>
+                      <span className="text-[11px] font-semibold text-green-600">${Number(cleaner.payRatePerHour || 0).toFixed(2)}/hr</span>
                     </td>
                     <td className="px-1.5 py-1.5 text-[11px] text-gray-600 break-words" title={cleaner.accountName || undefined}>
                       {cleaner.accountName || "—"}
@@ -535,7 +787,45 @@ const CleanerManager: React.FC<CleanerManagerProps> = ({ onCleanersRefresh }) =>
                     <td className="px-1.5 py-1.5 text-[11px] text-gray-600 font-mono">
                       {cleaner.accountNumber || "—"}
                     </td>
-                    {isAdmin && (
+                    <td className="px-1.5 py-1.5">
+                      <div className="relative inline-block">
+                        <button
+                          type="button"
+                          onMouseEnter={(e) => {
+                            setHoverCleanerId(cleaner.id);
+                            const rect = (e.currentTarget as HTMLButtonElement).getBoundingClientRect();
+                            setHoverPopover({
+                              cleanerId: cleaner.id,
+                              left: Math.round(rect.left),
+                              top: Math.round(rect.bottom + 8),
+                            });
+                          }}
+                          onMouseLeave={() => {
+                            // If user is moving into the popover, don't immediately close
+                            setTimeout(() => {
+                              if (!isHoverPopoverOver) {
+                                setHoverCleanerId(null);
+                                setHoverPopover(null);
+                              }
+                            }, 40);
+                          }}
+                          onClick={() => {
+                            setModalCleaner(cleaner);
+                            setModalAssignments(assignments);
+                            console.log("[CleanerManager] open sites modal payload:", {
+                              cleaner,
+                              assignments,
+                            });
+                          }}
+                          className="text-[11px] font-medium px-2 py-1 rounded-full bg-[#ECF3F4] text-[#3E5F6A] border border-transparent hover:border-[#3E5F6A]/50 hover:bg-[#dde8ea] transition-colors"
+                        >
+                          {assignedSiteCount === 1
+                            ? "1 site"
+                            : `${assignedSiteCount} sites`}
+                        </button>
+                      </div>
+                    </td>
+                    {canManageCleaners && (
                       <td className="px-1.5 py-1.5 text-right">
                         <div className="flex justify-end gap-1 flex-wrap">
                           <button

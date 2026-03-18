@@ -6,6 +6,7 @@
  */
 
 import * as sharepoint from "../lib/sharepoint";
+import { getSharePointAccessToken } from "../lib/graph";
 import { getCleanTrackUserIdToNameMap } from "./usersRepo";
 import type { AdHocJob } from "../types";
 
@@ -40,6 +41,56 @@ function toNum(v: unknown): number | null {
   return Number.isNaN(n) ? null : n;
 }
 
+function toNumArray(v: unknown): number[] | null {
+  if (v == null || v === "") return null;
+  if (Array.isArray(v)) {
+    const nums = v.map((x) => (typeof x === "number" ? x : parseInt(String(x), 10))).filter((n) => Number.isFinite(n));
+    return nums.length ? nums : null;
+  }
+  if (typeof v === "string") {
+    const s = v.trim();
+    if (!s) return null;
+    try {
+      const parsed = JSON.parse(s);
+      if (Array.isArray(parsed)) {
+        const nums = parsed.map((x) => (typeof x === "number" ? x : parseInt(String(x), 10))).filter((n) => Number.isFinite(n));
+        return nums.length ? nums : null;
+      }
+    } catch {
+      // fall through to comma-split parsing
+    }
+    const nums = s
+      .split(",")
+      .map((p) => parseInt(p.trim(), 10))
+      .filter((n) => Number.isFinite(n));
+    return nums.length ? nums : null;
+  }
+  return null;
+}
+
+function toJsonObject(v: unknown): Record<string, number> | null {
+  if (v == null || v === "") return null;
+  if (typeof v === "object" && v !== null && !Array.isArray(v)) {
+    const out: Record<string, number> = {};
+    for (const [k, val] of Object.entries(v as Record<string, unknown>)) {
+      const n = typeof val === "number" ? val : parseFloat(String(val));
+      if (Number.isFinite(n)) out[k] = n;
+    }
+    return Object.keys(out).length ? out : null;
+  }
+  if (typeof v === "string") {
+    const s = v.trim();
+    if (!s) return null;
+    try {
+      const parsed = JSON.parse(s);
+      return toJsonObject(parsed);
+    } catch {
+      return null;
+    }
+  }
+  return null;
+}
+
 function toBool(v: unknown): boolean {
   if (v === true || v === "Yes") return true;
   if (typeof v === "string") return v.trim().toLowerCase() === "yes";
@@ -55,8 +106,16 @@ function getStr(f: Record<string, unknown>, ...keys: string[]): string {
 }
 
 function getLookupId(f: Record<string, unknown>, baseKey: string): string {
-  const idKey = Object.keys(f).find(
-    (k) => k === `${baseKey}LookupId` || k === `${baseKey}Id` || k.toLowerCase() === `${baseKey.toLowerCase()}lookupid`
+  const rawKeys = Object.keys(f);
+  const compact = baseKey.replace(/\s+/g, "");
+  const candidates = [
+    `${baseKey}LookupId`,
+    `${baseKey}Id`,
+    `${compact}LookupId`,
+    `${compact}Id`,
+  ];
+  const idKey = rawKeys.find(
+    (k) => candidates.includes(k) || candidates.some((c) => k.toLowerCase() === c.toLowerCase())
   );
   if (!idKey) return "";
   const v = f[idKey];
@@ -66,8 +125,11 @@ function getLookupId(f: Record<string, unknown>, baseKey: string): string {
 }
 
 function getLookupValue(f: Record<string, unknown>, baseKey: string): string {
-  const nameKey = Object.keys(f).find(
-    (k) => k === baseKey || k.toLowerCase() === baseKey.toLowerCase()
+  const rawKeys = Object.keys(f);
+  const compact = baseKey.replace(/\s+/g, "");
+  const candidates = [baseKey, compact];
+  const nameKey = rawKeys.find(
+    (k) => candidates.includes(k) || candidates.some((c) => k.toLowerCase() === c.toLowerCase())
   );
   if (!nameKey) return "";
   const v = f[nameKey];
@@ -110,36 +172,67 @@ function itemToAdHocJob(
     assignedManagerName = managerIdToName[norm] ?? managerIdToName[assignedManagerId] ?? "";
   }
 
+  const jobTypeKey = map["Job Type"] ?? "Job_x0020_Type";
+  const companyKey = map["Company Name"] ?? "Company_x0020_Name";
+  const clientKey = map["Client Name"] ?? "Client_x0020_Name";
+  const manualSiteKey = map["Manual Site Name"] ?? "Manual_x0020_Site_x0020_Name";
+  const manualSiteAddressKey = map["Manual Site Address"] ?? "Manual_x0020_Site_x0020_Address";
   const reqNameKey = map["Requested By Name"] ?? "Requested_x0020_By_x0020_Name";
   const reqEmailKey = map["Requested By Email"] ?? "Requested_x0020_By_x0020_Email";
-  const reqCompanyKey = map["Requested By Company"] ?? "Requested_x0020_By_x0020_Company";
   const channelKey = map["Request Channel"] ?? "Request_x0020_Channel";
-  const summaryKey = map["Request Summary"] ?? "Request_x0020_Summary";
   const reqDateKey = map["Requested Date"] ?? "Requested_x0020_Date";
   const schedKey = map["Scheduled Date"] ?? "Scheduled_x0020_Date";
   const completedKey = map["Completed Date"] ?? "Completed_x0020_Date";
   const statusKey = map["Status"] ?? "Status";
-  const jobTypeKey = map["Job Type"] ?? "Job_x0020_Type";
   const budgetHrsKey = map["Budgeted Hours"] ?? "Budgeted_x0020_Hours";
-  const budgetRateKey = map["Budgeted Labour Rate"] ?? "Budgeted_x0020_Labour_x0020_Rate";
-  const budgetRevKey = map["Budgeted Revenue"] ?? "Budgeted_x0020_Revenue";
+  const actualHrsKey = map["Actual Hours"] ?? "Actual_x0020_Hours";
+  const serviceProviderKey = map["Service Provider"] ?? "Service_x0020_Provider";
+  const chargeRateKey = map["Charge Rate Per Hour"] ?? "Charge_x0020_Rate_x0020_Per_x0020_Hour";
+  const costRateKey = map["Cost Rate Per Hour"] ?? "Cost_x0020_Rate_x0020_Per_x0020_Hour";
+  const chargeKey = map["Charge"] ?? "Charge";
+  const costKey = map["Cost"] ?? "Cost";
+  const gpKey = map["Gross Profit"] ?? "Gross_x0020_Profit";
+  const markupKey = map["Markup %"] ?? "Markup_x0020__x0025_";
+  const gpPctKey = map["GP %"] ?? "GP_x0020__x0025_";
   const descKey = map["Description"] ?? "Description";
-  const proofReqKey = map["Approval Proof Required"] ?? "Approval_x0020_Proof_x0020_Required";
   const proofUpKey = map["Approval Proof Uploaded"] ?? "Approval_x0020_Proof_x0020_Uploaded";
-  const proofNotesKey = map["Approval Reference Notes"] ?? "Approval_x0020_Reference_x0020_Notes";
+  const approvalRefKey = map["Approval Reference"] ?? "Approval_x0020_Reference";
+  const notesKey = map["Notes for Information"] ?? "Notes_x0020_for_x0020_Information";
   const activeKey = map["Active"] ?? "Active";
+  const recurrenceFreqKey = map["Recurrence Frequency"] ?? "Recurrence_x0020_Frequency";
+  const recurrenceEndKey = map["Recurrence End Date"] ?? "Recurrence_x0020_End_x0020_Date";
+  const hoursPerDayKey = map["Hours Per Service Day"] ?? "Hours_x0020_Per_x0020_Service_x0020_Day";
+  const weekdaysKey = map["Recurrence Weekdays"] ?? "Recurrence_x0020_Weekdays";
+  const monthlyModeKey = map["Monthly Mode"] ?? "Monthly_x0020_Mode";
+  const monthlyDomKey = map["Monthly Day Of Month"] ?? "Monthly_x0020_Day_x0020_Of_x0020_Month";
+  const monthlyWomKey = map["Monthly Week Of Month"] ?? "Monthly_x0020_Week_x0020_Of_x0020_Month";
+  const monthlyWdKey = map["Monthly Weekday"] ?? "Monthly_x0020_Weekday";
+  const monthlyHoursKey = map["Monthly Hours"] ?? "Monthly_x0020_Hours";
+  const weekdayHoursKey = map["Weekday Hours"] ?? "Weekday_x0020_Hours";
+
+  const wdChargeKey = map["Weekday Charge Rate Override"] ?? "Weekday_x0020_Charge_x0020_Rate_x0020_Override";
+  const satChargeKey = map["Saturday Charge Rate Override"] ?? "Saturday_x0020_Charge_x0020_Rate_x0020_Override";
+  const sunChargeKey = map["Sunday Charge Rate Override"] ?? "Sunday_x0020_Charge_x0020_Rate_x0020_Override";
+  const phChargeKey = map["Public Holiday Charge Rate Override"] ?? "Public_x0020_Holiday_x0020_Charge_x0020_Rate_x0020_Override";
+  const wdCostKey = map["Weekday Cost Rate Override"] ?? "Weekday_x0020_Cost_x0020_Rate_x0020_Override";
+  const satCostKey = map["Saturday Cost Rate Override"] ?? "Saturday_x0020_Cost_x0020_Rate_x0020_Override";
+  const sunCostKey = map["Sunday Cost Rate Override"] ?? "Sunday_x0020_Cost_x0020_Rate_x0020_Override";
+  const phCostKey = map["Public Holiday Cost Rate Override"] ?? "Public_x0020_Holiday_x0020_Cost_x0020_Rate_x0020_Override";
 
   return {
     id: sharepoint.normalizeListItemId(item.id),
     jobName,
     jobType: getStr(f, jobTypeKey, "Job Type"),
+    companyName: getStr(f, companyKey),
+    clientName: getStr(f, clientKey),
     siteId: siteId || null,
     siteName: siteName || "",
+    manualSiteName: getStr(f, manualSiteKey) || undefined,
+    manualSiteAddress: getStr(f, manualSiteAddressKey) || undefined,
+    description: getStr(f, descKey),
     requestedByName: getStr(f, reqNameKey),
     requestedByEmail: getStr(f, reqEmailKey),
-    requestedByCompany: getStr(f, reqCompanyKey),
     requestChannel: getStr(f, channelKey),
-    requestSummary: getStr(f, summaryKey),
     requestedDate: toDateStr(f[reqDateKey] ?? f["RequestedDate"]),
     assignedManagerId: assignedManagerId || null,
     assignedManagerName,
@@ -147,13 +240,39 @@ function itemToAdHocJob(
     completedDate: toDateStr(f[completedKey] ?? f["CompletedDate"]),
     status: getStr(f, statusKey, "Status"),
     budgetedHours: toNum(f[budgetHrsKey] ?? f["BudgetedHours"]),
-    budgetedLabourRate: toNum(f[budgetRateKey] ?? f["BudgetedLabourRate"]),
-    budgetedRevenue: toNum(f[budgetRevKey] ?? f["BudgetedRevenue"]),
-    description: getStr(f, descKey),
-    approvalProofRequired: toBool(f[proofReqKey] ?? f["ApprovalProofRequired"]),
+    actualHours: toNum(f[actualHrsKey] ?? f["ActualHours"]),
+    serviceProvider: getStr(f, serviceProviderKey),
+    chargeRatePerHour: toNum(f[chargeRateKey]),
+    costRatePerHour: toNum(f[costRateKey]),
+    charge: toNum(f[chargeKey] ?? f["Charge"]),
+    cost: toNum(f[costKey] ?? f["Cost"]),
+    grossProfit: toNum(f[gpKey] ?? f["GrossProfit"]),
+    markupPercent: toNum(f[markupKey]),
+    gpPercent: toNum(f[gpPctKey]),
     approvalProofUploaded: toBool(f[proofUpKey] ?? f["ApprovalProofUploaded"]),
-    approvalReferenceNotes: getStr(f, proofNotesKey),
+    approvalReference: getStr(f, approvalRefKey),
+    notesForInformation: getStr(f, notesKey),
     active: toBool(f[activeKey] ?? f["Active"]) !== false,
+    recurrenceFrequency: (getStr(f, recurrenceFreqKey) as any) || null,
+    recurrenceStartDate: toDateStr(f[schedKey] ?? f["ScheduledDate"]),
+    recurrenceEndDate: toDateStr(f[recurrenceEndKey]),
+    hoursPerServiceDay: toNum(f[hoursPerDayKey]),
+    recurrenceWeekdays: toNumArray(f[weekdaysKey]),
+    weekdayHours: toJsonObject(f[weekdayHoursKey]),
+    monthlyMode: (getStr(f, monthlyModeKey) as any) || null,
+    monthlyDayOfMonth: toNum(f[monthlyDomKey]),
+    monthlyWeekOfMonth: (getStr(f, monthlyWomKey) as any) || null,
+    monthlyWeekday: toNum(f[monthlyWdKey]),
+    monthlyHours: toNum(f[monthlyHoursKey]),
+
+    weekdayChargeRateOverride: toNum(f[wdChargeKey]),
+    saturdayChargeRateOverride: toNum(f[satChargeKey]),
+    sundayChargeRateOverride: toNum(f[sunChargeKey]),
+    publicHolidayChargeRateOverride: toNum(f[phChargeKey]),
+    weekdayCostRateOverride: toNum(f[wdCostKey]),
+    saturdayCostRateOverride: toNum(f[satCostKey]),
+    sundayCostRateOverride: toNum(f[sunCostKey]),
+    publicHolidayCostRateOverride: toNum(f[phCostKey]),
   };
 }
 
@@ -217,25 +336,62 @@ export async function getAdHocJobs(
 export interface AdHocJobPayload {
   jobName: string;
   jobType?: string;
+  companyName?: string;
+  clientName?: string;
   siteId?: string | null;
+  manualSiteName?: string;
+  manualSiteAddress?: string;
   assignedManagerId?: string | null;
   requestedByName?: string;
   requestedByEmail?: string;
-  requestedByCompany?: string;
   requestChannel?: string;
-  requestSummary?: string;
   requestedDate?: string | null;
   scheduledDate?: string | null;
   completedDate?: string | null;
   status?: string;
   budgetedHours?: number | null;
-  budgetedLabourRate?: number | null;
-  budgetedRevenue?: number | null;
+  /** Recurring schedule fields (optional; only used when schedule type = Recurring). */
+  recurrenceFrequency?: 'Weekly' | 'Fortnightly' | 'Monthly' | null;
+  recurrenceEndDate?: string | null;
+  /** Legacy: single hours-per-day (kept for backward compatibility). */
+  hoursPerServiceDay?: number | null;
+  recurrenceWeekdays?: number[] | null;
+  /** Per-weekday hours for weekly/fortnightly. Keys are day indexes 0..6. */
+  weekdayHours?: Record<string, number> | null;
+  monthlyMode?: 'day_of_month' | 'nth_weekday' | null;
+  monthlyDayOfMonth?: number | null;
+  monthlyWeekOfMonth?: 'First' | 'Second' | 'Third' | 'Fourth' | 'Last' | null;
+  monthlyWeekday?: number | null;
+  monthlyHours?: number | null;
+
+  /** Optional day-type rate overrides (fixed rates, not multipliers). */
+  weekdayChargeRateOverride?: number | null;
+  saturdayChargeRateOverride?: number | null;
+  sundayChargeRateOverride?: number | null;
+  publicHolidayChargeRateOverride?: number | null;
+  weekdayCostRateOverride?: number | null;
+  saturdayCostRateOverride?: number | null;
+  sundayCostRateOverride?: number | null;
+  publicHolidayCostRateOverride?: number | null;
   description?: string;
-  approvalProofRequired?: boolean;
+  actualHours?: number | null;
+  serviceProvider?: string;
+  chargeRatePerHour?: number | null;
+  costRatePerHour?: number | null;
+  charge?: number | null;
+  cost?: number | null;
+  grossProfit?: number | null;
+  markupPercent?: number | null;
+  gpPercent?: number | null;
   approvalProofUploaded?: boolean;
-  approvalReferenceNotes?: string;
+  approvalReference?: string;
+  notesForInformation?: string;
   active?: boolean;
+}
+
+export interface AdHocAttachment {
+  fileName: string;
+  url: string;
 }
 
 function payloadToFields(
@@ -246,12 +402,29 @@ function payloadToFields(
   const fields: Record<string, unknown> = {};
   if (payload.jobName !== undefined) fields[titleKey === "LinkTitle" ? "Title" : titleKey] = payload.jobName;
   if (payload.jobType !== undefined) fields[map["Job Type"] ?? "Job_x0020_Type"] = payload.jobType ?? "";
+  if (payload.companyName !== undefined) {
+    const k = map["Company Name"] ?? "Company_x0020_Name";
+    fields[k] = payload.companyName ?? "";
+  }
+  if (payload.clientName !== undefined) {
+    const k = map["Client Name"] ?? "Client_x0020_Name";
+    fields[k] = payload.clientName ?? "";
+  }
 
   const siteInternal = map["Site"] ?? "Site";
   const siteLookupKey = siteInternal === "Site" ? "SiteLookupId" : `${siteInternal}LookupId`;
   if (payload.siteId !== undefined && payload.siteId != null && payload.siteId !== "") {
     const num = /^\d+$/.test(payload.siteId) ? parseInt(payload.siteId, 10) : payload.siteId;
     fields[siteLookupKey] = num;
+  }
+  // Manual/unlisted site (do not auto-create a Site).
+  if (payload.manualSiteName !== undefined) {
+    const k = map["Manual Site Name"] ?? "Manual_x0020_Site_x0020_Name";
+    if (k) fields[k] = payload.manualSiteName ?? "";
+  }
+  if (payload.manualSiteAddress !== undefined) {
+    const k = map["Manual Site Address"] ?? "Manual_x0020_Site_x0020_Address";
+    if (k) fields[k] = payload.manualSiteAddress ?? "";
   }
 
   const mgrInternal = map["Assigned Manager"] ?? "Assigned_x0020_Manager";
@@ -267,20 +440,56 @@ function payloadToFields(
   };
   set("Requested By Name", "Requested_x0020_By_x0020_Name", payload.requestedByName ?? "");
   set("Requested By Email", "Requested_x0020_By_x0020_Email", payload.requestedByEmail ?? "");
-  set("Requested By Company", "Requested_x0020_By_x0020_Company", payload.requestedByCompany ?? "");
   set("Request Channel", "Request_x0020_Channel", payload.requestChannel ?? "");
-  set("Request Summary", "Request_x0020_Summary", payload.requestSummary ?? "");
   set("Requested Date", "Requested_x0020_Date", payload.requestedDate ?? null);
   set("Scheduled Date", "Scheduled_x0020_Date", payload.scheduledDate ?? null);
   set("Completed Date", "Completed_x0020_Date", payload.completedDate ?? null);
   set("Status", "Status", payload.status ?? "Requested");
   set("Budgeted Hours", "Budgeted_x0020_Hours", payload.budgetedHours ?? null);
-  set("Budgeted Labour Rate", "Budgeted_x0020_Labour_x0020_Rate", payload.budgetedLabourRate ?? null);
-  set("Budgeted Revenue", "Budgeted_x0020_Revenue", payload.budgetedRevenue ?? null);
+  // Recurrence fields (optional; safe no-ops if SharePoint columns do not exist).
+  set("Recurrence Frequency", "Recurrence_x0020_Frequency", payload.recurrenceFrequency ?? null);
+  // We reuse Scheduled Date as the commencement/start date for recurring jobs.
+  set("Recurrence End Date", "Recurrence_x0020_End_x0020_Date", payload.recurrenceEndDate ?? null);
+  set("Hours Per Service Day", "Hours_x0020_Per_x0020_Service_x0020_Day", payload.hoursPerServiceDay ?? null);
+  if (payload.weekdayHours !== undefined) {
+    const k = map["Weekday Hours"] ?? "Weekday_x0020_Hours";
+    if (k) fields[k] = payload.weekdayHours ? JSON.stringify(payload.weekdayHours) : "";
+  }
+  if (payload.recurrenceWeekdays !== undefined) {
+    const k = map["Recurrence Weekdays"] ?? "Recurrence_x0020_Weekdays";
+    if (k) fields[k] = payload.recurrenceWeekdays ? payload.recurrenceWeekdays.join(",") : "";
+  }
+  set("Monthly Mode", "Monthly_x0020_Mode", payload.monthlyMode ?? null);
+  set("Monthly Day Of Month", "Monthly_x0020_Day_x0020_Of_x0020_Month", payload.monthlyDayOfMonth ?? null);
+  set("Monthly Week Of Month", "Monthly_x0020_Week_x0020_Of_x0020_Month", payload.monthlyWeekOfMonth ?? null);
+  set("Monthly Weekday", "Monthly_x0020_Weekday", payload.monthlyWeekday ?? null);
+  set("Monthly Hours", "Monthly_x0020_Hours", payload.monthlyHours ?? null);
+
+  set("Weekday Charge Rate Override", "Weekday_x0020_Charge_x0020_Rate_x0020_Override", payload.weekdayChargeRateOverride ?? null);
+  set("Saturday Charge Rate Override", "Saturday_x0020_Charge_x0020_Rate_x0020_Override", payload.saturdayChargeRateOverride ?? null);
+  set("Sunday Charge Rate Override", "Sunday_x0020_Charge_x0020_Rate_x0020_Override", payload.sundayChargeRateOverride ?? null);
+  set("Public Holiday Charge Rate Override", "Public_x0020_Holiday_x0020_Charge_x0020_Rate_x0020_Override", payload.publicHolidayChargeRateOverride ?? null);
+  set("Weekday Cost Rate Override", "Weekday_x0020_Cost_x0020_Rate_x0020_Override", payload.weekdayCostRateOverride ?? null);
+  set("Saturday Cost Rate Override", "Saturday_x0020_Cost_x0020_Rate_x0020_Override", payload.saturdayCostRateOverride ?? null);
+  set("Sunday Cost Rate Override", "Sunday_x0020_Cost_x0020_Rate_x0020_Override", payload.sundayCostRateOverride ?? null);
+  set("Public Holiday Cost Rate Override", "Public_x0020_Holiday_x0020_Cost_x0020_Rate_x0020_Override", payload.publicHolidayCostRateOverride ?? null);
   set("Description", "Description", payload.description ?? "");
-  set("Approval Proof Required", "Approval_x0020_Proof_x0020_Required", payload.approvalProofRequired ?? false);
+  set("Actual Hours", "Actual_x0020_Hours", payload.actualHours ?? null);
+  set("Service Provider", "Service_x0020_Provider", payload.serviceProvider ?? "");
+  set("Charge Rate Per Hour", "Charge_x0020_Rate_x0020_Per_x0020_Hour", payload.chargeRatePerHour ?? null);
+  set("Cost Rate Per Hour", "Cost_x0020_Rate_x0020_Per_x0020_Hour", payload.costRatePerHour ?? null);
+  set("Charge", "Charge", payload.charge ?? null);
+  set("Cost", "Cost", payload.cost ?? null);
+  set("Gross Profit", "Gross_x0020_Profit", payload.grossProfit ?? null);
+  set("Markup %", "Markup_x0020__x0025_", payload.markupPercent ?? null);
+  set("GP %", "GP_x0020__x0025_", payload.gpPercent ?? null);
   set("Approval Proof Uploaded", "Approval_x0020_Proof_x0020_Uploaded", payload.approvalProofUploaded ?? false);
-  set("Approval Reference Notes", "Approval_x0020_Reference_x0020_Notes", payload.approvalReferenceNotes ?? "");
+  // Only send Approval Reference if we have a trusted internal name from SharePoint;
+  // avoid hard-coded fallback that may not exist.
+  if (map["Approval Reference"] && payload.approvalReference !== undefined) {
+    fields[map["Approval Reference"]] = payload.approvalReference ?? "";
+  }
+  set("Notes for Information", "Notes_x0020_for_x0020_Information", payload.notesForInformation ?? "");
   set("Active", "Active", payload.active !== false);
   return fields;
 }
@@ -336,4 +545,125 @@ export async function updateAdHocJob(
   }
 
   await sharepoint.updateListItem(accessToken, siteId, listId, itemId, fields);
+}
+
+/**
+ * Upload proof files as attachments to an Ad Hoc Job list item.
+ * Uses SharePoint REST (Graph does not support list item attachments).
+ * Call after create or when editing; then set Approval Proof Uploaded on the item if needed.
+ */
+export async function uploadAdHocJobAttachments(
+  accessToken: string,
+  itemId: string,
+  files: File[]
+): Promise<void> {
+  if (files.length === 0) return;
+  const webUrl = await sharepoint.getSiteWebUrl(accessToken);
+  const spoToken = await getSharePointAccessToken();
+  if (!spoToken) {
+    throw new Error(
+      "SharePoint attachment upload failed: missing SharePoint API token. Ask an admin to grant Sites.ReadWrite.All for the SharePoint resource."
+    );
+  }
+  const formDigest = await sharepoint.getSharePointFormDigest(webUrl, spoToken);
+  const listTitle = AD_HOC_JOBS_LIST_NAME;
+  const normId = sharepoint.normalizeListItemId(itemId);
+  for (const file of files) {
+    const buf = await file.arrayBuffer();
+    const original = file.name.trim() || "proof";
+    const lastDot = original.lastIndexOf(".");
+    const base = lastDot > 0 ? original.slice(0, lastDot) : original;
+    const ext = lastDot > 0 ? original.slice(lastDot) : "";
+    const uniqueSuffix = Date.now().toString();
+    const safeName = `${base}-${uniqueSuffix}${ext}`;
+    await sharepoint.addListItemAttachment(
+      webUrl,
+      listTitle,
+      normId,
+      safeName,
+      buf,
+      spoToken,
+      formDigest
+    );
+  }
+}
+
+/** Fetch existing attachments for an Ad Hoc Job (for viewing in UI). */
+export async function getAdHocJobAttachments(
+  accessToken: string,
+  itemId: string
+): Promise<AdHocAttachment[]> {
+  const webUrl = await sharepoint.getSiteWebUrl(accessToken);
+  const spoToken = await getSharePointAccessToken();
+  if (!spoToken) return [];
+  const listTitle = AD_HOC_JOBS_LIST_NAME;
+  const normId = sharepoint.normalizeListItemId(itemId);
+  const escapeForOData = (s: string) => s.replace(/'/g, "''");
+  const safeTitle = escapeForOData(listTitle.trim());
+  const url = `${webUrl}/_api/web/lists/GetByTitle('${safeTitle}')/items(${normId})/AttachmentFiles`;
+  const res = await fetch(url, {
+    method: "GET",
+    headers: {
+      Authorization: `Bearer ${spoToken}`,
+      Accept: "application/json;odata=nometadata",
+    },
+  });
+  const text = await res.text();
+  if (!res.ok) {
+    console.error("[SP REST] list attachments error", res.status, text);
+    return [];
+  }
+  let json: any;
+  try {
+    json = text ? JSON.parse(text) : {};
+  } catch {
+    return [];
+  }
+  const items: Array<{ FileName?: string; ServerRelativeUrl?: string }> =
+    json.value ??
+    (json.d && Array.isArray(json.d.results) ? json.d.results : []);
+  return items
+    .filter((x) => x.FileName && x.ServerRelativeUrl)
+    .map((x) => ({
+      fileName: x.FileName as string,
+      url: `${webUrl}${x.ServerRelativeUrl}`,
+    }));
+}
+
+/** Delete a single attachment from an Ad Hoc Job list item by file name. */
+export async function deleteAdHocJobAttachment(
+  accessToken: string,
+  itemId: string,
+  fileName: string
+): Promise<void> {
+  const webUrl = await sharepoint.getSiteWebUrl(accessToken);
+  const spoToken = await getSharePointAccessToken();
+  if (!spoToken) return;
+  const listTitle = AD_HOC_JOBS_LIST_NAME;
+  const normId = sharepoint.normalizeListItemId(itemId);
+  const escapeForOData = (s: string) => s.replace(/'/g, "''");
+  const safeTitle = escapeForOData(listTitle.trim());
+  const safeName = escapeForOData(fileName.trim());
+  const url = `${webUrl}/_api/web/lists/GetByTitle('${safeTitle}')/items(${normId})/AttachmentFiles/getByFileName('${safeName}')`;
+  const res = await fetch(url, {
+    method: "DELETE",
+    headers: {
+      Authorization: `Bearer ${spoToken}`,
+    },
+  });
+  if (!res.ok) {
+    const text = await res.text();
+    console.error("[SP REST] delete attachment error", res.status, text);
+  }
+}
+
+/** Delete an Ad Hoc Job list item. Moves item to SharePoint recycle bin. */
+export async function deleteAdHocJob(
+  accessToken: string,
+  itemId: string
+): Promise<void> {
+  const siteId = await sharepoint.getSiteId(accessToken);
+  const listId = await sharepoint.getListIdByName(accessToken, siteId, AD_HOC_JOBS_LIST_NAME);
+  if (!listId) throw new Error(`List "${AD_HOC_JOBS_LIST_NAME}" not found.`);
+  await sharepoint.deleteListItem(accessToken, siteId, listId, itemId);
 }

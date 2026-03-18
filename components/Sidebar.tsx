@@ -37,21 +37,26 @@ const Sidebar: React.FC<SidebarProps> = ({ currentView, onViewChange, mobileOpen
 
   const panel = (
     <>
-      <div className="p-4 mb-2 flex flex-col gap-4">
-        <div className="flex items-center gap-2 hover:bg-black/5 cursor-pointer transition-colors duration-150 rounded-md p-2">
-          <div className="bg-gray-800 p-1 rounded shadow-sm">
+      <div className="px-5 py-5 mb-2 flex flex-col gap-4 so-sidebar-header border-b border-white/5">
+        <div className="flex items-center gap-3 rounded-lg px-1.5 py-1.5 cursor-default">
+          <div className="bg-slate-900/80 p-1.5 rounded-md shadow-sm border border-white/10">
             <ShieldCheck className="text-white" size={16} />
           </div>
-          <h1 className="font-semibold text-[14px] text-gray-700 truncate">CleanTrack Ops</h1>
+          <div className="min-w-0">
+            <h1 className="font-semibold text-[14px] text-slate-50 truncate">CleanTrack Ops</h1>
+            <p className="text-[11px] text-slate-300 truncate">Slate Ops workspace</p>
+          </div>
         </div>
 
         <div className="px-2">
-          <label className="text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-1 block">Role</label>
-          <p className="text-[12px] font-medium text-gray-700">Role: {displayRole}</p>
+          <label className="text-[10px] font-semibold text-slate-400 uppercase tracking-[0.18em] mb-1 block">
+            Role
+          </label>
+          <p className="text-[12px] font-medium text-slate-100">Role: {displayRole}</p>
         </div>
       </div>
 
-      <nav className="flex-1 px-2 space-y-[2px] overflow-y-auto">
+      <nav className="flex-1 px-3 space-y-1.5 overflow-y-auto">
         {menuItems.map((item) => {
           const Icon = item.icon;
           const isActive = currentView === item.id;
@@ -59,28 +64,44 @@ const Sidebar: React.FC<SidebarProps> = ({ currentView, onViewChange, mobileOpen
             <button
               key={item.id}
               onClick={() => handleNav(item.id as ViewType)}
-              className={`w-full flex items-center gap-2 px-3 py-3 rounded-md transition-colors duration-150 group text-[14px] min-h-[44px] ${
+              className={`w-full flex items-center gap-3 px-3.5 py-3 rounded-md so-sidebar-nav-item transition-colors duration-150 group text-[13px] min-h-[42px] ${
                 isActive
-                  ? 'bg-white shadow-sm text-gray-900 border border-[#edeef0]'
-                  : 'text-gray-500 hover:bg-black/5 hover:text-gray-900'
+                  ? 'so-sidebar-nav-item--active text-slate-50'
+                  : 'text-slate-300 hover:bg-slate-700/70 hover:text-white'
               }`}
             >
-              <Icon size={16} className={isActive ? 'text-gray-800' : 'text-gray-400 group-hover:text-gray-600'} />
+              <Icon
+                size={16}
+                className={
+                  isActive
+                    ? 'text-teal-200'
+                    : 'text-slate-400 group-hover:text-slate-200'
+                }
+              />
               <span className={isActive ? 'font-medium' : 'font-normal'}>{item.label}</span>
             </button>
           );
         })}
       </nav>
 
-      <div className="p-4 mt-auto">
-        <div className="flex items-center gap-2 px-2 py-2 hover:bg-black/5 rounded-md cursor-pointer transition-colors min-h-[44px]">
-          <div className="w-6 h-6 rounded-full bg-orange-100 flex items-center justify-center text-orange-700 font-bold text-[10px]">
+      <div className="px-5 py-4 mt-auto border-t border-white/5">
+        <div className="flex items-center gap-3 px-2 py-2 rounded-lg transition-colors min-h-[44px] hover:bg-slate-700/70 cursor-default">
+          <div className="w-7 h-7 rounded-full bg-emerald-500/10 flex items-center justify-center text-emerald-300 font-semibold text-[10px] border border-emerald-400/30">
             {displayRole === 'Admin' ? 'AD' : displayRole === 'Manager' ? 'OM' : '—'}
           </div>
           <div className="flex-1 min-w-0">
-            <p className="text-[12px] font-medium text-gray-700 truncate">{displayRole === 'Admin' ? 'System Admin' : displayRole === 'Manager' ? 'Ops Manager' : displayRole}</p>
+            <p className="text-[12px] font-medium text-slate-50 truncate">
+              {displayRole === 'Admin'
+                ? 'System Admin'
+                : displayRole === 'Manager'
+                ? 'Ops Manager'
+                : displayRole}
+            </p>
+            <p className="text-[11px] text-slate-400 truncate">
+              Microsoft 365 · Internal
+            </p>
           </div>
-          <ChevronRight size={14} className="text-gray-400" />
+          <ChevronRight size={14} className="text-slate-500" />
         </div>
       </div>
     </>
@@ -89,7 +110,7 @@ const Sidebar: React.FC<SidebarProps> = ({ currentView, onViewChange, mobileOpen
   return (
     <>
       {/* Desktop: fixed sidebar so it stays visible when scrolling */}
-      <aside className="hidden lg:flex fixed left-0 top-0 z-30 w-60 h-screen bg-[#f7f6f3] border-r border-[#edeef0] flex-col select-none">
+      <aside className="hidden lg:flex fixed left-0 top-0 z-30 w-60 h-screen so-sidebar border-r border-slate-800 flex-col select-none">
         {panel}
       </aside>
 
@@ -101,13 +122,13 @@ const Sidebar: React.FC<SidebarProps> = ({ currentView, onViewChange, mobileOpen
             onClick={onMobileClose}
             aria-hidden="true"
           />
-          <div className="absolute left-0 top-0 bottom-0 w-72 max-w-[85vw] bg-[#f7f6f3] border-r border-[#edeef0] flex flex-col shadow-xl">
-            <div className="flex items-center justify-between p-4 border-b border-[#edeef0]">
-              <span className="font-semibold text-gray-800">Menu</span>
+          <div className="absolute left-0 top-0 bottom-0 w-72 max-w-[85vw] so-sidebar border-r border-slate-800 flex flex-col shadow-xl">
+            <div className="flex items-center justify-between p-4 border-b border-slate-800">
+              <span className="font-semibold text-slate-100">Navigation</span>
               <button
                 type="button"
                 onClick={onMobileClose}
-                className="p-2 -m-2 rounded-md text-gray-500 hover:bg-black/10 hover:text-gray-700 touch-manipulation"
+                className="p-2 -m-2 rounded-md text-slate-400 hover:bg-slate-700/70 hover:text-white touch-manipulation"
                 aria-label="Close menu"
               >
                 <X size={20} />

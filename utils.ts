@@ -40,7 +40,12 @@ export const getStatusBg = (current: number, budget: number) => {
   return 'bg-green-50 text-green-700 border-green-200';
 };
 
-/** Format number as AUD currency. Handles negatives with minus sign. */
+/** Round a number to 2 decimal places for currency storage (avoids floating-point drift). */
+export function roundCurrency(value: number): number {
+  return Math.round(value * 100) / 100;
+}
+
+/** Format number as AUD currency. Handles negatives with minus sign. Always 2 decimal places. */
 export function formatCurrencyAUD(value: number): string {
   const abs = Math.abs(value);
   const formatted = abs.toLocaleString("en-AU", {

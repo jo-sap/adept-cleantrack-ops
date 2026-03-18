@@ -18,6 +18,8 @@ import {
 import { getAssignedSiteIdsForManager, createSiteManagerAssignment, getAssignedManagersForSite, deleteSiteManagerAssignment, fetchSiteManagerAssignments, joinAssignmentsToSites } from "../repositories/siteManagersRepo";
 import { getCleanTrackManagers } from "../repositories/usersRepo";
 import { createSiteBudget, getSiteBudgets, updateSiteBudget, type SiteBudgetHours } from "../repositories/budgetsRepo";
+import { getSiteCleanerAssignments } from "../repositories/assignedCleanersRepo";
+import { normalizeListItemId } from "../lib/sharepoint";
 
 const AU_STATES = ["ACT", "NSW", "NT", "QLD", "SA", "TAS", "VIC", "WA"];
 const DAY_LABELS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"] as const;
@@ -35,7 +37,8 @@ interface BulkSiteRow {
   address: string;
   monthlyRevenue: number | "";
   fortnightCostBudget: number | "";
-  budgetLabourRate: number | "";
+  /** Weekday (Mon–Fri) labour rate — saved as Weekday Labour Rate in SharePoint. */
+  weekdayLabourRate: number | "";
   state: string;
   active: boolean;
   visitFrequency: VisitFreq;
@@ -48,10 +51,14 @@ const WRITE_PERMISSION_HINT =
   "Admin consent may be required for Sites.ReadWrite.All in the Azure AD app registration. If consent is already granted, sign out and sign in again to get a token with write scope.";
 
 interface SiteManagerProps {
-  onUpdateSite?: () => void;
+  /** Called after sites data changes. Pass true to refresh without showing the global loading spinner (keeps search and list visible). */
+  onUpdateSite?: (silent?: boolean) => void;
+  onViewSite?: (siteId: string) => void;
+  /** When this changes, sites and assigned cleaners are refetched (e.g. after returning from Site Detail). */
+  refreshTrigger?: number;
 }
 
-const SiteManager: React.FC<SiteManagerProps> = ({ onUpdateSite }) => {
+const SiteManager: React.FC<SiteManagerProps> = ({ onUpdateSite, onViewSite, refreshTrigger }) => {
   const { isAdmin: isAdminFromRole } = useRole();
   const { user } = useAppAuth();
   const isAdmin = isAdminFromRole || user?.role === "Admin";
@@ -60,6 +67,9 @@ const SiteManager: React.FC<SiteManagerProps> = ({ onUpdateSite }) => {
   const [budgetsBySiteId, setBudgetsBySiteId] = useState<Record<string, SiteBudgetHours>>({});
   const [assignedManagersBySiteId, setAssignedManagersBySiteId] = useState<
     Record<string, { assignedManagers: { managerName: string; assignmentItemId: string }[] }>
+  >({});
+  const [assignedCleanersBySiteId, setAssignedCleanersBySiteId] = useState<
+    Record<string, string[]>
   >({});
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -86,7 +96,10 @@ const SiteManager: React.FC<SiteManagerProps> = ({ onUpdateSite }) => {
   const [selectedManagerIds, setSelectedManagerIds] = useState<string[]>([]);
   const [visitFrequency, setVisitFrequency] = useState<VisitFreq>("Weekly");
   const [hoursPerVisit, setHoursPerVisit] = useState<number | "">("");
-  const [budgetLabourRate, setBudgetLabourRate] = useState<number | "">("");
+  const [weekdayLabourRate, setWeekdayLabourRate] = useState<number | "">("");
+  const [saturdayLabourRate, setSaturdayLabourRate] = useState<number | "">("");
+  const [sundayLabourRate, setSundayLabourRate] = useState<number | "">("");
+  const [phLabourRate, setPhLabourRate] = useState<number | "">("");
 
   const [bulkModalOpen, setBulkModalOpen] = useState(false);
   const [bulkRows, setBulkRows] = useState<BulkSiteRow[]>([]);
@@ -129,10 +142,14 @@ const SiteManager: React.FC<SiteManagerProps> = ({ onUpdateSite }) => {
         }
       }
       setSites(data);
-      const [budgets, managersList, assignments] = await Promise.all([
+      const [budgets, managersList, assignments, cleanerAssignments] = await Promise.all([
         getSiteBudgets(token).catch(() => ({})),
         getCleanTrackManagers(token).catch(() => []),
         fetchSiteManagerAssignments(token).catch(() => []),
+        getSiteCleanerAssignments(token, { activeOnly: true }).catch((err) => {
+          console.warn("[SiteManager] getSiteCleanerAssignments failed:", err);
+          return [];
+        }),
       ]);
       setBudgetsBySiteId(budgets);
       setManagers(managersList);
@@ -145,6 +162,17 @@ const SiteManager: React.FC<SiteManagerProps> = ({ onUpdateSite }) => {
           ])
         )
       );
+      const cleanersBySite: Record<string, string[]> = {};
+      for (const a of cleanerAssignments) {
+        if (!a.siteId || !a.cleanerName || !a.active) continue;
+        const key = normalizeListItemId(String(a.siteId));
+        if (!key) continue;
+        if (!cleanersBySite[key]) cleanersBySite[key] = [];
+        if (!cleanersBySite[key].includes(a.cleanerName)) {
+          cleanersBySite[key].push(a.cleanerName);
+        }
+      }
+      setAssignedCleanersBySiteId(cleanersBySite);
     } catch (e) {
       const msg = e instanceof Error ? e.message : "Failed to load sites.";
       setError(msg);
@@ -157,6 +185,13 @@ const SiteManager: React.FC<SiteManagerProps> = ({ onUpdateSite }) => {
   useEffect(() => {
     loadSites();
   }, [loadSites]);
+
+  /** Refetch when parent signals (e.g. user returned to Sites from Site Detail after assigning cleaners). */
+  useEffect(() => {
+    if (refreshTrigger != null && refreshTrigger > 0) {
+      loadSites(true);
+    }
+  }, [refreshTrigger, loadSites]);
 
   const filteredSites = React.useMemo(() => {
     const q = siteSearchQuery.trim().toLowerCase();
@@ -221,7 +256,10 @@ const SiteManager: React.FC<SiteManagerProps> = ({ onUpdateSite }) => {
     setFortnightCostBudget("");
     setVisitFrequency("Weekly");
     setHoursPerVisit("");
-    setBudgetLabourRate("");
+    setWeekdayLabourRate("");
+    setSaturdayLabourRate("");
+    setSundayLabourRate("");
+    setPhLabourRate("");
     setSelectedManagerEmails([]);
     setSubmitError(null);
     getGraphAccessToken().then((token) => {
@@ -268,7 +306,7 @@ const SiteManager: React.FC<SiteManagerProps> = ({ onUpdateSite }) => {
           }
         : { Sun: 0, Mon: 0, Tue: 0, Wed: 0, Thu: 0, Fri: 0, Sat: 0 }
     );
-    setFortnightCostBudget("");
+    setFortnightCostBudget(budget?.fortnightCostBudget != null ? budget.fortnightCostBudget : "");
     setSelectedManagerEmails([]);
     const freq = budget?.visitFrequency;
     const normalizedFreq: VisitFreq =
@@ -277,8 +315,17 @@ const SiteManager: React.FC<SiteManagerProps> = ({ onUpdateSite }) => {
     setHoursPerVisit(
       budget?.hoursPerVisit != null && budget.hoursPerVisit > 0 ? budget.hoursPerVisit : ""
     );
-    setBudgetLabourRate(
-      budget?.budgetLabourRate != null && budget.budgetLabourRate > 0 ? budget.budgetLabourRate : ""
+    setWeekdayLabourRate(
+      budget?.weekdayLabourRate != null && budget.weekdayLabourRate >= 0 ? budget.weekdayLabourRate : (budget?.budgetLabourRate != null && budget.budgetLabourRate > 0 ? budget.budgetLabourRate : "")
+    );
+    setSaturdayLabourRate(
+      budget?.saturdayLabourRate != null && budget.saturdayLabourRate >= 0 ? budget.saturdayLabourRate : (budget?.weekendLabourRate != null && budget.weekendLabourRate >= 0 ? budget.weekendLabourRate : "")
+    );
+    setSundayLabourRate(
+      budget?.sundayLabourRate != null && budget.sundayLabourRate >= 0 ? budget.sundayLabourRate : (budget?.weekendLabourRate != null && budget.weekendLabourRate >= 0 ? budget.weekendLabourRate : "")
+    );
+    setPhLabourRate(
+      budget?.phLabourRate != null && budget.phLabourRate >= 0 ? budget.phLabourRate : ""
     );
     setSubmitError(null);
     getGraphAccessToken().then(async (token) => {
@@ -309,7 +356,7 @@ const SiteManager: React.FC<SiteManagerProps> = ({ onUpdateSite }) => {
     address: "",
     monthlyRevenue: "",
     fortnightCostBudget: "",
-    budgetLabourRate: "",
+    weekdayLabourRate: "",
     state: "",
     active: true,
     visitFrequency: "Weekly",
@@ -395,7 +442,7 @@ const SiteManager: React.FC<SiteManagerProps> = ({ onUpdateSite }) => {
               week2FridayHours: row.dailyHoursWeek2.Fri,
               week2SaturdayHours: row.dailyHoursWeek2.Sat,
             }),
-            ...(row.budgetLabourRate !== "" && !Number.isNaN(Number(row.budgetLabourRate)) && { budgetLabourRate: Number(row.budgetLabourRate) }),
+            ...(row.weekdayLabourRate !== "" && !Number.isNaN(Number(row.weekdayLabourRate)) && { weekdayLabourRate: Number(row.weekdayLabourRate) }),
           });
         } catch (budgetErr) {
           console.warn("Bulk: site budget create failed for", siteName, budgetErr);
@@ -425,7 +472,7 @@ const SiteManager: React.FC<SiteManagerProps> = ({ onUpdateSite }) => {
     setBulkModalOpen(false);
     showToast(successCount === rows.length ? `Added ${successCount} sites.` : `Added ${successCount} of ${rows.length} sites.`);
     await loadSites(true);
-    onUpdateSite?.();
+    onUpdateSite?.(true);
   };
 
   const handleSubmit = async () => {
@@ -475,7 +522,10 @@ const SiteManager: React.FC<SiteManagerProps> = ({ onUpdateSite }) => {
               week2FridayHours: dailyHoursWeek2.Fri,
               week2SaturdayHours: dailyHoursWeek2.Sat,
             }),
-            ...(budgetLabourRate !== "" && !Number.isNaN(Number(budgetLabourRate)) && { budgetLabourRate: Number(budgetLabourRate) }),
+            ...(weekdayLabourRate !== "" && !Number.isNaN(Number(weekdayLabourRate)) && Number(weekdayLabourRate) >= 0 && { weekdayLabourRate: Number(weekdayLabourRate) }),
+            ...(saturdayLabourRate !== "" && saturdayLabourRate != null && !Number.isNaN(Number(saturdayLabourRate)) && Number(saturdayLabourRate) >= 0 && { saturdayLabourRate: Number(saturdayLabourRate) }),
+            ...(sundayLabourRate !== "" && sundayLabourRate != null && !Number.isNaN(Number(sundayLabourRate)) && Number(sundayLabourRate) >= 0 && { sundayLabourRate: Number(sundayLabourRate) }),
+            ...(phLabourRate !== "" && phLabourRate != null && !Number.isNaN(Number(phLabourRate)) && Number(phLabourRate) >= 0 && { phLabourRate: Number(phLabourRate) }),
           });
         } catch (budgetErr) {
           console.warn("Site budget create failed (site was created):", budgetErr);
@@ -522,7 +572,11 @@ const SiteManager: React.FC<SiteManagerProps> = ({ onUpdateSite }) => {
           week2ThursdayHours: isFortnightly ? dailyHoursWeek2.Thu : 0,
           week2FridayHours: isFortnightly ? dailyHoursWeek2.Fri : 0,
           week2SaturdayHours: isFortnightly ? dailyHoursWeek2.Sat : 0,
-          ...(budgetLabourRate !== "" && !Number.isNaN(Number(budgetLabourRate)) && { budgetLabourRate: Number(budgetLabourRate) }),
+          ...(weekdayLabourRate !== "" && weekdayLabourRate != null && !Number.isNaN(Number(weekdayLabourRate)) && Number(weekdayLabourRate) >= 0 && { weekdayLabourRate: Number(weekdayLabourRate) }),
+          ...(fortnightCostBudget !== "" && fortnightCostBudget != null && !Number.isNaN(Number(fortnightCostBudget)) && { fortnightCostBudget: Number(fortnightCostBudget) }),
+          ...(saturdayLabourRate !== "" && saturdayLabourRate != null && !Number.isNaN(Number(saturdayLabourRate)) && Number(saturdayLabourRate) >= 0 && { saturdayLabourRate: Number(saturdayLabourRate) }),
+          ...(sundayLabourRate !== "" && sundayLabourRate != null && !Number.isNaN(Number(sundayLabourRate)) && Number(sundayLabourRate) >= 0 && { sundayLabourRate: Number(sundayLabourRate) }),
+          ...(phLabourRate !== "" && phLabourRate != null && !Number.isNaN(Number(phLabourRate)) && Number(phLabourRate) >= 0 && { phLabourRate: Number(phLabourRate) }),
         };
         if (budget?.budgetListItemId) {
           await updateSiteBudget(token, budget.budgetListItemId, budgetPayload);
@@ -547,6 +601,11 @@ const SiteManager: React.FC<SiteManagerProps> = ({ onUpdateSite }) => {
             week2ThursdayHours: budgetPayload.week2ThursdayHours,
             week2FridayHours: budgetPayload.week2FridayHours,
             week2SaturdayHours: budgetPayload.week2SaturdayHours,
+            ...(budgetPayload.fortnightCostBudget !== undefined && { fortnightCostBudget: budgetPayload.fortnightCostBudget }),
+            ...(budgetPayload.weekdayLabourRate !== undefined && { weekdayLabourRate: budgetPayload.weekdayLabourRate }),
+            ...(budgetPayload.saturdayLabourRate !== undefined && { saturdayLabourRate: budgetPayload.saturdayLabourRate }),
+            ...(budgetPayload.sundayLabourRate !== undefined && { sundayLabourRate: budgetPayload.sundayLabourRate }),
+            ...(budgetPayload.phLabourRate !== undefined && { phLabourRate: budgetPayload.phLabourRate }),
           });
         }
         const currentAssignments = await getAssignedManagersForSite(token, editingSite.id);
@@ -585,7 +644,7 @@ const SiteManager: React.FC<SiteManagerProps> = ({ onUpdateSite }) => {
       }
       closeModal();
       await loadSites(true);
-      onUpdateSite?.();
+      onUpdateSite?.(true);
     } catch (e) {
       const msg = e instanceof Error ? e.message : "Save failed.";
       const isPermissionError =
@@ -628,7 +687,7 @@ const SiteManager: React.FC<SiteManagerProps> = ({ onUpdateSite }) => {
       await setSiteActive(token, site.id, active);
       showToast(active ? "Site activated." : "Site deactivated.");
       await loadSites(true);
-      onUpdateSite?.();
+      onUpdateSite?.(true);
     } catch (e) {
       const msg = e instanceof Error ? e.message : "Update failed.";
       const isPermissionError =
@@ -648,7 +707,7 @@ const SiteManager: React.FC<SiteManagerProps> = ({ onUpdateSite }) => {
       await deleteSite(token, site.id);
       showToast("Site deleted.");
       await loadSites(true);
-      onUpdateSite?.();
+      onUpdateSite?.(true);
     } catch (e) {
       const msg = e instanceof Error ? e.message : "Delete failed.";
       showToast(msg.includes("403") || msg.includes("401") ? `Permission missing. ${WRITE_PERMISSION_HINT}` : msg);
@@ -667,7 +726,7 @@ const SiteManager: React.FC<SiteManagerProps> = ({ onUpdateSite }) => {
         await deleteSiteManagerAssignment(token, assignmentItemId);
         showToast("Manager removed from site.");
         await loadSites(true);
-        onUpdateSite?.();
+        onUpdateSite?.(true);
       } catch (e) {
         const msg = e instanceof Error ? e.message : "Failed to remove manager.";
         showToast(msg);
@@ -715,7 +774,7 @@ const SiteManager: React.FC<SiteManagerProps> = ({ onUpdateSite }) => {
       }
       setSelectedSiteIds([]);
       await loadSites(true);
-      onUpdateSite?.();
+      onUpdateSite?.(true);
       if (failed > 0) {
         showToast(`Deleted ${deleted} site(s). ${failed} failed.`);
       } else {
@@ -731,10 +790,12 @@ const SiteManager: React.FC<SiteManagerProps> = ({ onUpdateSite }) => {
 
   return (
     <div className="space-y-6 sm:space-y-8">
-      <div className="flex flex-col sm:flex-row sm:justify-between sm:items-end gap-4 border-b border-[#edeef0] pb-4">
+      <div className="flex flex-col sm:flex-row sm:justify-between sm:items-end gap-4">
         <div className="min-w-0">
-          <h2 className="text-2xl sm:text-3xl font-bold text-gray-900">Sites</h2>
-          <p className="text-gray-500 text-sm mt-1">
+          <h2 className="text-[20px] sm:text-[22px] font-semibold text-gray-900">
+            Sites &amp; Budgets
+          </h2>
+          <p className="text-gray-500 text-[13px] mt-1">
             Sites &amp; Budgets — Configure service windows and financial caps per site.
           </p>
         </div>
@@ -742,13 +803,13 @@ const SiteManager: React.FC<SiteManagerProps> = ({ onUpdateSite }) => {
           <div className="flex items-center gap-2 flex-shrink-0">
             <button
               onClick={openBulkModal}
-              className="bg-white text-gray-900 border border-[#edeef0] px-4 py-2.5 rounded-lg text-sm font-bold hover:bg-gray-50 transition-colors flex items-center gap-2 touch-manipulation"
+              className="so-btn-secondary px-4 py-2.5 text-sm font-medium flex items-center gap-2 touch-manipulation"
             >
               <Layers size={16} /> Bulk Add
             </button>
             <button
               onClick={openAdd}
-              className="bg-gray-900 text-white px-4 py-2.5 rounded-lg text-sm font-bold hover:bg-gray-800 transition-colors flex items-center gap-2 touch-manipulation"
+              className="so-btn-primary px-4 py-2.5 text-sm font-medium flex items-center gap-2 touch-manipulation shadow-sm"
             >
               <Plus size={16} /> New Site
             </button>
@@ -763,7 +824,7 @@ const SiteManager: React.FC<SiteManagerProps> = ({ onUpdateSite }) => {
           placeholder="Search sites by name or address…"
           value={siteSearchQuery}
           onChange={(e) => setSiteSearchQuery(e.target.value)}
-          className="w-full pl-10 pr-4 py-2.5 border border-[#edeef0] rounded-lg text-sm text-gray-900 placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-gray-900/10 focus:border-gray-400"
+          className="w-full pl-10 pr-4 py-2.5 so-input text-sm text-gray-900 placeholder-gray-400 bg-white"
           aria-label="Search sites"
         />
       </div>
@@ -812,21 +873,22 @@ const SiteManager: React.FC<SiteManagerProps> = ({ onUpdateSite }) => {
         </div>
       ) : (
         <>
-        <div className="border border-[#edeef0] rounded-lg bg-white shadow-sm overflow-hidden table-scroll-mobile">
-          <table className="w-full border-collapse text-left min-w-0 table-auto md:table-fixed md:min-w-[800px]">
+        <div className="so-table bg-white overflow-hidden table-scroll-mobile">
+          <table className="w-full border-collapse text-left min-w-0 table-auto md:table-fixed md:min-w-[900px]">
             <colgroup className="hidden md:contents">
               {isAdmin && <col style={{ width: '4%' }} />}
-              <col style={{ width: isAdmin ? '17%' : '20%' }} />
-              <col style={{ width: isAdmin ? '17%' : '22%' }} />
+              <col style={{ width: isAdmin ? '16%' : '18%' }} />
+              <col style={{ width: isAdmin ? '16%' : '20%' }} />
               <col style={{ width: '6%' }} />
               <col style={{ width: '11%' }} />
-              <col style={{ width: isAdmin ? '22%' : '24%' }} />
+              <col style={{ width: '10%' }} />
+              <col style={{ width: isAdmin ? '19%' : '21%' }} />
               <col style={{ width: '8%' }} />
               <col style={{ width: isAdmin ? '6%' : '8%' }} />
               {isAdmin && <col style={{ width: '10%' }} />}
             </colgroup>
             <thead>
-              <tr className="bg-[#fcfcfb] border-b border-[#edeef0]">
+              <tr className="border-b border-[#edeef0]">
                 {isAdmin && (
                   <th className="px-2 py-2 md:px-1.5 md:py-1.5 w-10">
                     <input
@@ -842,7 +904,7 @@ const SiteManager: React.FC<SiteManagerProps> = ({ onUpdateSite }) => {
                   <button
                     type="button"
                     onClick={() => handleSiteSort("name")}
-                    className="text-[9px] font-bold text-gray-500 uppercase tracking-widest flex items-center gap-0.5 hover:text-gray-900 focus:outline-none focus:ring-2 focus:ring-gray-900/20 rounded"
+                    className="text-[10px] font-semibold text-gray-700 uppercase tracking-widest flex items-center gap-0.5 hover:text-gray-900 focus:outline-none focus:ring-2 focus:ring-gray-900/20 rounded"
                   >
                     Site name
                     {siteSortBy === "name" && (siteSortDir === "asc" ? <ChevronUp size={12} /> : <ChevronDown size={12} />)}
@@ -852,7 +914,7 @@ const SiteManager: React.FC<SiteManagerProps> = ({ onUpdateSite }) => {
                   <button
                     type="button"
                     onClick={() => handleSiteSort("address")}
-                    className="text-[9px] font-bold text-gray-500 uppercase tracking-widest flex items-center gap-0.5 hover:text-gray-900 focus:outline-none focus:ring-2 focus:ring-gray-900/20 rounded"
+                    className="text-[10px] font-semibold text-gray-700 uppercase tracking-widest flex items-center gap-0.5 hover:text-gray-900 focus:outline-none focus:ring-2 focus:ring-gray-900/20 rounded"
                   >
                     Address
                     {siteSortBy === "address" && (siteSortDir === "asc" ? <ChevronUp size={12} /> : <ChevronDown size={12} />)}
@@ -862,27 +924,28 @@ const SiteManager: React.FC<SiteManagerProps> = ({ onUpdateSite }) => {
                   <button
                     type="button"
                     onClick={() => handleSiteSort("state")}
-                    className="text-[9px] font-bold text-gray-500 uppercase tracking-widest flex items-center gap-0.5 hover:text-gray-900 focus:outline-none focus:ring-2 focus:ring-gray-900/20 rounded"
+                    className="text-[10px] font-semibold text-gray-700 uppercase tracking-widest flex items-center gap-0.5 hover:text-gray-900 focus:outline-none focus:ring-2 focus:ring-gray-900/20 rounded"
                   >
                     State
                     {siteSortBy === "state" && (siteSortDir === "asc" ? <ChevronUp size={12} /> : <ChevronDown size={12} />)}
                   </button>
                 </th>
-                <th className="hidden md:table-cell px-1.5 py-1.5 text-[9px] font-bold text-gray-500 uppercase tracking-widest">Assigned managers</th>
-                <th className="px-2 py-2 md:px-1.5 md:py-1.5 text-[9px] font-bold text-gray-500 uppercase tracking-widest">Daily hours</th>
-                <th className="hidden md:table-cell px-1.5 py-1.5 text-[9px] font-bold text-gray-500 uppercase tracking-widest">Budget rate</th>
+                <th className="hidden md:table-cell px-1.5 py-1.5 text-[10px] font-semibold text-gray-700 uppercase tracking-widest">Assigned managers</th>
+                <th className="hidden md:table-cell px-1.5 py-1.5 text-[10px] font-semibold text-gray-700 uppercase tracking-widest">Assigned cleaners</th>
+                <th className="px-2 py-2 md:px-1.5 md:py-1.5 text-[10px] font-semibold text-gray-700 uppercase tracking-widest">Daily hours</th>
+                <th className="hidden md:table-cell px-1.5 py-1.5 text-[10px] font-semibold text-gray-700 uppercase tracking-widest">Weekday rate</th>
                 <th className="px-2 py-2 md:px-1.5 md:py-1.5">
                   <button
                     type="button"
                     onClick={() => handleSiteSort("fortnightlyCap")}
-                    className="text-[9px] font-bold text-gray-500 uppercase tracking-widest flex items-center gap-0.5 hover:text-gray-900 focus:outline-none focus:ring-2 focus:ring-gray-900/20 rounded"
+                    className="text-[10px] font-semibold text-gray-700 uppercase tracking-widest flex items-center gap-0.5 hover:text-gray-900 focus:outline-none focus:ring-2 focus:ring-gray-900/20 rounded"
                   >
                     Fortnight cap
                     {siteSortBy === "fortnightlyCap" && (siteSortDir === "asc" ? <ChevronUp size={12} /> : <ChevronDown size={12} />)}
                   </button>
                 </th>
                 {isAdmin && (
-                  <th className="px-2 py-2 md:px-1.5 md:py-1.5 text-[9px] font-bold text-gray-500 uppercase tracking-widest text-right">Actions</th>
+                  <th className="px-2 py-2 md:px-1.5 md:py-1.5 text-[10px] font-semibold text-gray-700 uppercase tracking-widest text-right">Actions</th>
                 )}
               </tr>
             </thead>
@@ -901,10 +964,10 @@ const SiteManager: React.FC<SiteManagerProps> = ({ onUpdateSite }) => {
                 ]
               : [];
             const fortnightCap = budget?.fortnightCap ?? 0;
-            const budgetRate = budget?.budgetLabourRate;
+            const budgetRate = budget?.weekdayLabourRate ?? budget?.budgetLabourRate; // budgetLabourRate = legacy column name
 
             return (
-              <tr key={site.id} className="hover:bg-[#f7f6f3] transition-colors">
+              <tr key={site.id} className="transition-colors">
                 {isAdmin && (
                   <td className="px-2 py-2 md:px-1.5 md:py-1.5 align-top">
                     <input
@@ -921,7 +984,19 @@ const SiteManager: React.FC<SiteManagerProps> = ({ onUpdateSite }) => {
                   </td>
                 )}
                 <td className="px-2 py-2 md:px-1.5 md:py-1.5 align-top min-w-[120px]">
-                  <span className="text-sm md:text-xs font-bold text-gray-900 break-words">{site.siteName || "Unnamed site"}</span>
+                  {onViewSite ? (
+                    <button
+                      type="button"
+                      onClick={() => onViewSite(site.id)}
+                      className="text-left text-sm md:text-xs font-bold text-gray-900 break-words hover:underline"
+                    >
+                      {site.siteName || "Unnamed site"}
+                    </button>
+                  ) : (
+                    <span className="text-sm md:text-xs font-bold text-gray-900 break-words">
+                      {site.siteName || "Unnamed site"}
+                    </span>
+                  )}
                 </td>
                 <td className="hidden md:table-cell px-1.5 py-1.5 align-top">
                   {site.address ? (
@@ -943,25 +1018,46 @@ const SiteManager: React.FC<SiteManagerProps> = ({ onUpdateSite }) => {
                       return <span className="text-[10px] text-gray-400">No assigned managers</span>;
                     }
                     return (
-                      <div className="flex flex-wrap gap-0.5 items-center">
-                        {assignedManagers.map((a, i) => (
-                          <span
-                            key={a.assignmentItemId ?? i}
-                            className="inline-flex items-center gap-1.5 pl-1.5 pr-0.5 py-0.5 rounded-full text-[10px] font-medium bg-gray-100 text-gray-800"
-                          >
-                            {a.managerName}
+                      <div className="flex flex-wrap gap-1 items-center">
+                        {assignedManagers.map((a, i) => {
+                          const name = a.managerName || "";
+                          const parts = name.trim().split(/\s+/);
+                          const initials =
+                            parts.length === 1
+                              ? (parts[0][0] ?? "").toUpperCase()
+                              : `${(parts[0][0] ?? "").toUpperCase()}${(parts[parts.length - 1][0] ?? "").toUpperCase()}`;
+                          return (
                             <button
+                              key={a.assignmentItemId ?? i}
                               type="button"
                               onClick={() => handleRemoveManagerFromSite(site.siteName, a.assignmentItemId)}
-                              className="touch-target p-1 rounded hover:bg-red-100 text-red-500 hover:text-red-700 inline-flex items-center justify-center shrink-0"
+                              className="w-7 h-7 rounded-md bg-gray-100 text-[10px] font-bold text-gray-700 flex items-center justify-center border border-gray-200 hover:bg-red-50 hover:text-red-600 hover:border-red-200"
                               aria-label={`Remove ${a.managerName} from site`}
-                              title="Remove manager from site"
+                              title={`${a.managerName} – click to remove`}
                             >
-                              <X size={14} strokeWidth={2.5} />
+                              {initials || "?"}
                             </button>
-                          </span>
-                        ))}
+                          );
+                        })}
                       </div>
+                    );
+                  })()}
+                </td>
+                <td className="hidden md:table-cell px-1.5 py-1.5 align-top">
+                  {(() => {
+                    const cleanerNames = assignedCleanersBySiteId[normalizeListItemId(site.id)] ?? [];
+                    if (cleanerNames.length === 0) {
+                      return <span className="text-[10px] text-gray-400">—</span>;
+                    }
+                    const primaryName = cleanerNames[0]?.trim() || "";
+                    const hasMore = cleanerNames.length > 1;
+                    return (
+                      <span className="text-[11px] font-medium text-gray-700 break-words" title={hasMore ? cleanerNames.join(", ") : undefined}>
+                        {primaryName}
+                        {hasMore ? (
+                          <span className="text-[10px] text-gray-500">, +{cleanerNames.length - 1} more</span>
+                        ) : null}
+                      </span>
                     );
                   })()}
                 </td>
@@ -1109,25 +1205,23 @@ const SiteManager: React.FC<SiteManagerProps> = ({ onUpdateSite }) => {
                         placeholder="0"
                       />
                     </div>
-                    {modalMode === "add" && (
-                      <div>
-                        <label className="block text-xs font-bold text-gray-500 uppercase tracking-widest mb-1">
-                          $ Fortnight Cost Budget
-                        </label>
-                        <input
-                          type="number"
-                          min={0}
-                          step={0.01}
-                          value={fortnightCostBudget}
-                          onChange={(e) => {
-                            const v = e.target.value;
-                            setFortnightCostBudget(v === "" ? "" : parseFloat(v) || 0);
-                          }}
-                          className="w-full border border-[#edeef0] rounded-lg px-3 py-2 text-sm"
-                          placeholder="0"
-                        />
-                      </div>
-                    )}
+                    <div>
+                      <label className="block text-xs font-bold text-gray-500 uppercase tracking-widest mb-1">
+                        $ Fortnight Cost Budget
+                      </label>
+                      <input
+                        type="number"
+                        min={0}
+                        step={0.01}
+                        value={fortnightCostBudget}
+                        onChange={(e) => {
+                          const v = e.target.value;
+                          setFortnightCostBudget(v === "" ? "" : parseFloat(v) || 0);
+                        }}
+                        className="w-full border border-[#edeef0] rounded-lg px-3 py-2 text-sm"
+                        placeholder="0"
+                      />
+                    </div>
                   </div>
                   <div>
                     <label className="block text-xs font-bold text-gray-500 uppercase tracking-widest mb-1">
@@ -1200,23 +1294,57 @@ const SiteManager: React.FC<SiteManagerProps> = ({ onUpdateSite }) => {
                       />
                     </div>
                   )}
-                  <div>
-                    <label className="block text-xs font-bold text-gray-500 uppercase tracking-widest mb-1">
-                      Budget labour rate ($/hr)
-                    </label>
-                    <input
-                      type="number"
-                      min={0}
-                      step={0.5}
-                      value={budgetLabourRate}
-                      onChange={(e) => {
-                        const v = e.target.value;
-                        setBudgetLabourRate(v === "" ? "" : parseFloat(v) || 0);
-                      }}
-                      className="w-full border border-[#edeef0] rounded-lg px-3 py-2 text-sm"
-                      placeholder="e.g. 35"
-                    />
-                    <p className="text-[10px] text-gray-400 mt-1">Used for budgeted labour cost, profit margin and dashboard figures.</p>
+                  <h4 className="text-xs font-bold text-gray-500 uppercase tracking-widest mb-2">Labour rates ($/hr)</h4>
+                  <p className="text-[10px] text-gray-400 mb-2">Used for budgeted labour cost, profit margin and dashboard. Weekday = Mon–Fri; PH = public holiday.</p>
+                  <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+                    <div>
+                      <label className="block text-xs font-bold text-gray-500 uppercase tracking-widest mb-1">Weekday ($/hr)</label>
+                      <input
+                        type="number"
+                        min={0}
+                        step={0.5}
+                        value={weekdayLabourRate}
+                        onChange={(e) => setWeekdayLabourRate(e.target.value === "" ? "" : parseFloat(e.target.value) || 0)}
+                        className="w-full border border-[#edeef0] rounded-lg px-3 py-2 text-sm"
+                        placeholder="Mon–Fri"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-xs font-bold text-gray-500 uppercase tracking-widest mb-1">Saturday ($/hr)</label>
+                      <input
+                        type="number"
+                        min={0}
+                        step={0.5}
+                        value={saturdayLabourRate}
+                        onChange={(e) => setSaturdayLabourRate(e.target.value === "" ? "" : parseFloat(e.target.value) || 0)}
+                        className="w-full border border-[#edeef0] rounded-lg px-3 py-2 text-sm"
+                        placeholder="Sat"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-xs font-bold text-gray-500 uppercase tracking-widest mb-1">Sunday ($/hr)</label>
+                      <input
+                        type="number"
+                        min={0}
+                        step={0.5}
+                        value={sundayLabourRate}
+                        onChange={(e) => setSundayLabourRate(e.target.value === "" ? "" : parseFloat(e.target.value) || 0)}
+                        className="w-full border border-[#edeef0] rounded-lg px-3 py-2 text-sm"
+                        placeholder="Sun"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-xs font-bold text-gray-500 uppercase tracking-widest mb-1">PH ($/hr)</label>
+                      <input
+                        type="number"
+                        min={0}
+                        step={0.5}
+                        value={phLabourRate}
+                        onChange={(e) => setPhLabourRate(e.target.value === "" ? "" : parseFloat(e.target.value) || 0)}
+                        className="w-full border border-[#edeef0] rounded-lg px-3 py-2 text-sm"
+                        placeholder="Public holiday"
+                      />
+                    </div>
                   </div>
                 </div>
               </div>
@@ -1470,10 +1598,10 @@ const SiteManager: React.FC<SiteManagerProps> = ({ onUpdateSite }) => {
                               type="number"
                               min={0}
                               step={0.01}
-                              value={row.budgetLabourRate === "" ? "" : row.budgetLabourRate}
+                              value={row.weekdayLabourRate === "" ? "" : row.weekdayLabourRate}
                               onChange={(e) => {
                                 const v = e.target.value;
-                                updateBulkRow(row.id, { budgetLabourRate: v === "" ? "" : parseFloat(v) || 0 });
+                                updateBulkRow(row.id, { weekdayLabourRate: v === "" ? "" : parseFloat(v) || 0 });
                               }}
                               placeholder="—"
                               className="w-full border border-[#edeef0] rounded px-1 py-1 text-sm"

@@ -13,7 +13,11 @@ export type SiteBudgetForApp = {
   friday: number;
   saturday: number;
   visitFrequency?: string;
-  budgetLabourRate?: number;
+  /** Hourly rates for budgeted labour ($/hr). */
+  weekdayLabourRate?: number;
+  saturdayLabourRate?: number;
+  sundayLabourRate?: number;
+  phLabourRate?: number;
 };
 
 /** Display name -> internal name. Cached in-memory. */
@@ -165,7 +169,10 @@ function payloadToFields(
   }
   if (payload.monthlyRevenue !== undefined) {
     const k = map["Monthly Revenue"];
-    if (k) fields[k] = payload.monthlyRevenue ?? null;
+    if (k) {
+      const val = payload.monthlyRevenue;
+      fields[k] = val == null ? null : Math.round(Number(val) * 100) / 100;
+    }
   }
   return fields;
 }
@@ -229,6 +236,10 @@ export function toAppSite(
   cleaner_rates: Record<string, number>;
   visit_frequency?: string;
   budget_labour_rate?: number;
+  budget_weekday_labour_rate?: number;
+  budget_saturday_labour_rate?: number;
+  budget_sunday_labour_rate?: number;
+  budget_ph_labour_rate?: number;
 } {
   const fortnightHours = budget ? budget.fortnightCap : 0;
   const dailyBudgets = budget
@@ -246,6 +257,11 @@ export function toAppSite(
     financial_budget: 0,
     cleaner_rates: {},
     ...(budget?.visitFrequency && { visit_frequency: budget.visitFrequency }),
-    ...(budget?.budgetLabourRate != null && budget.budgetLabourRate > 0 && { budget_labour_rate: budget.budgetLabourRate }),
+    /* Weekday Labour Rate (schema) → budget_labour_rate + budget_weekday_labour_rate; legacy Budget Labour Rate fallback */
+    ...((budget?.weekdayLabourRate ?? budget?.budgetLabourRate) != null && { budget_labour_rate: budget.weekdayLabourRate ?? budget.budgetLabourRate ?? 0 }),
+    ...(budget?.weekdayLabourRate != null && budget.weekdayLabourRate >= 0 && { budget_weekday_labour_rate: budget.weekdayLabourRate }),
+    ...(budget?.saturdayLabourRate != null && budget.saturdayLabourRate >= 0 && { budget_saturday_labour_rate: budget.saturdayLabourRate }),
+    ...(budget?.sundayLabourRate != null && budget.sundayLabourRate >= 0 && { budget_sunday_labour_rate: budget.sundayLabourRate }),
+    ...(budget?.phLabourRate != null && budget.phLabourRate >= 0 && { budget_ph_labour_rate: budget.phLabourRate }),
   };
 }

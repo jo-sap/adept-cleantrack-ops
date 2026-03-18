@@ -1,6 +1,6 @@
 import { msalInstance } from "./msal";
 import { InteractionRequiredAuthError } from "@azure/msal-browser";
-import { GRAPH_SCOPES } from "../src/auth/graphScopes";
+import { GRAPH_SCOPES, SHAREPOINT_SCOPES } from "../src/auth/graphScopes";
 
 /** Decode JWT payload without verification (for dev diagnostics). Returns aud and scp. */
 export function decodeToken(accessToken: string): { aud?: string; scp?: string } {
@@ -45,6 +45,34 @@ export async function getGraphAccessToken(): Promise<string | null> {
           console.log("GRAPH token aud:", aud, "scp:", scp);
         }
         console.log("GRAPH token scopes:", response.scopes);
+        return response.accessToken;
+      } catch {
+        return null;
+      }
+    }
+    return null;
+  }
+}
+
+/** Returns a SharePoint Online access token or null if not signed in / not configured. */
+export async function getSharePointAccessToken(): Promise<string | null> {
+  const account = msalInstance.getAllAccounts()[0];
+  if (!account) return null;
+  try {
+    const response = await msalInstance.acquireTokenSilent({ account, scopes: SHAREPOINT_SCOPES });
+    if (IS_DEV && response.accessToken) {
+      const { aud, scp } = decodeToken(response.accessToken);
+      console.log("SPO token aud:", aud, "scp:", scp);
+    }
+    return response.accessToken;
+  } catch (error) {
+    if (error instanceof InteractionRequiredAuthError) {
+      try {
+        const response = await msalInstance.acquireTokenPopup({ account, scopes: SHAREPOINT_SCOPES });
+        if (IS_DEV && response.accessToken) {
+          const { aud, scp } = decodeToken(response.accessToken);
+          console.log("SPO token aud:", aud, "scp:", scp);
+        }
         return response.accessToken;
       } catch {
         return null;

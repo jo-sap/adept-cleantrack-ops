@@ -55,6 +55,7 @@ async function graphFetch<T>(
 export interface GraphSiteResponse {
   id: string;
   displayName?: string;
+  webUrl?: string;
 }
 
 /** Resolve the CleanTrack SharePoint site ID. Uses EXACT endpoint: GET .../sites/adeptservicesaustralia.sharepoint.com:/sites/cleantrack */
@@ -65,6 +66,16 @@ export async function getSiteId(accessToken: string): Promise<string> {
   const siteId = site.id;
   if (IS_DEV) console.log("[SP] resolved siteId:", siteId);
   return siteId;
+}
+
+/** Get the site's web URL (for SharePoint REST _api calls). Same token as Graph. */
+export async function getSiteWebUrl(accessToken: string): Promise<string> {
+  const siteId = await getSiteId(accessToken);
+  const url = `${GRAPH_BASE}/sites/${siteId}?$select=webUrl`;
+  const site = await graphFetch<GraphSiteResponse>(accessToken, url);
+  const webUrl = site?.webUrl?.trim();
+  if (!webUrl) throw new Error("Site webUrl not found");
+  return webUrl.replace(/\/$/, "");
 }
 
 export interface GraphListEntry {
@@ -343,5 +354,66 @@ export async function getListItemsByFilter(
   } catch {
     const all = await getListItems(accessToken, siteId, listId);
     return all;
+  }
+}
+
+/** SharePoint REST: get form digest for POST requests. POST {webUrl}/_api/contextinfo */
+export async function getSharePointFormDigest(
+  webUrl: string,
+  accessToken: string
+): Promise<string> {
+  const url = `${webUrl}/_api/contextinfo`;
+  const res = await fetch(url, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${accessToken}`,
+      Accept: "application/json;odata=verbose",
+    },
+  });
+  const text = await res.text();
+  if (!res.ok) {
+    console.error("[SP REST] contextinfo error", res.status, text);
+    throw new Error(`SharePoint contextinfo ${res.status}: ${text}`);
+  }
+  const data = text ? JSON.parse(text) : {};
+  const digest =
+    (data as { d?: { GetContextWebInformation?: { FormDigestValue?: string } } }).d?.GetContextWebInformation
+      ?.FormDigestValue;
+  if (!digest) throw new Error("Form digest not in response");
+  return digest;
+}
+
+/**
+ * SharePoint REST: add an attachment to a list item.
+ * POST {webUrl}/_api/web/lists/GetByTitle('ListTitle')/items(itemId)/AttachmentFiles/add(FileName='name')
+ * List must have attachments enabled. Graph API does not support list item attachments; REST does.
+ */
+export async function addListItemAttachment(
+  webUrl: string,
+  listTitle: string,
+  itemId: string,
+  fileName: string,
+  fileBody: ArrayBuffer,
+  accessToken: string,
+  formDigest: string
+): Promise<void> {
+  const escapeForOData = (s: string) => s.replace(/'/g, "''");
+  const safeTitle = escapeForOData(listTitle.trim());
+  const safeName = escapeForOData(fileName.trim()) || "attachment";
+  const itemIdNum = normalizeListItemId(itemId);
+  const url = `${webUrl}/_api/web/lists/GetByTitle('${safeTitle}')/items(${itemIdNum})/AttachmentFiles/add(FileName='${safeName}')`;
+  const res = await fetch(url, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${accessToken}`,
+      "X-RequestDigest": formDigest,
+      "Content-Type": "application/octet-stream",
+    },
+    body: fileBody,
+  });
+  if (!res.ok) {
+    const errText = await res.text();
+    console.error("[SP REST] add attachment error", res.status, errText);
+    throw new Error(`Upload attachment failed: ${res.status} ${errText}`);
   }
 }

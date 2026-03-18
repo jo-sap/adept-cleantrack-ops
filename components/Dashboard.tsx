@@ -1,7 +1,7 @@
 
 import React, { useMemo, useState, useEffect } from 'react';
 import { Site, TimeEntry, FortnightPeriod, Cleaner } from '../types';
-import { ChevronRight, DollarSign, PieChart, Briefcase } from 'lucide-react';
+import { ChevronRight, DollarSign, PieChart, Briefcase, ChevronUp, ChevronDown } from 'lucide-react';
 import MiniComplianceGrid from './MiniComplianceGrid';
 import { useRole } from '../contexts/RoleContext';
 import { useAppAuth } from '../contexts/AppAuthContext';
@@ -12,6 +12,8 @@ import { getAdHocJobs } from '../repositories/adHocJobsRepo';
 import { getCleanTrackUserByEmail } from '../repositories/usersRepo';
 import { DEV_BYPASS_LOGIN } from '../config/authFlags';
 import { formatCurrencyAUD, formatCurrencyAUDSignedExpense, formatPercent } from '../utils';
+import { computeBudgetedLabourCostForRange } from '../lib/budgetedLabourCost';
+import { getPublicHolidaysInRange } from '../lib/publicHolidays';
 import { format } from 'date-fns';
 
 interface DashboardProps {
@@ -30,7 +32,14 @@ const Dashboard: React.FC<DashboardProps> = ({ sites, cleaners, entries, current
   const [kpiMetrics, setKpiMetrics] = useState<DashboardMetrics | null>(null);
   const [kpiLoading, setKpiLoading] = useState(false);
   const [kpiError, setKpiError] = useState<string | null>(null);
-  const [adHocStats, setAdHocStats] = useState<{ total: number; completed: number; pending: number; budgetedHours: number; actualHours: number } | null>(null);
+  const [adHocStats, setAdHocStats] = useState<{
+    total: number;
+    completed: number;
+    pending: number;
+    budgetedHours: number;
+    revenue: number;
+    grossProfit: number;
+  } | null>(null);
 
   useEffect(() => {
     if (!isAdmin) return;
@@ -108,12 +117,20 @@ const Dashboard: React.FC<DashboardProps> = ({ sites, cleaners, entries, current
         const completed = jobs.filter((j) => j.status === "Completed").length;
         const pending = jobs.filter((j) => j.status !== "Completed" && j.status !== "Cancelled").length;
         const budgetedHours = jobs.reduce((s, j) => s + (j.budgetedHours ?? 0), 0);
+        const revenue = jobs.reduce((s, j) => s + (j.charge ?? 0), 0);
+        const grossProfit = jobs.reduce((s, j) => {
+          if (j.grossProfit != null) return s + j.grossProfit;
+          const charge = j.charge ?? 0;
+          const cost = j.cost ?? 0;
+          return s + (charge - cost);
+        }, 0);
         setAdHocStats({
           total: jobs.length,
           completed,
           pending,
           budgetedHours,
-          actualHours: 0,
+          revenue,
+          grossProfit,
         });
       } catch {
         if (!cancelled) setAdHocStats(null);
@@ -122,11 +139,25 @@ const Dashboard: React.FC<DashboardProps> = ({ sites, cleaners, entries, current
     return () => { cancelled = true; };
   }, [currentPeriod.startDate, isAdmin, user?.email]);
 
-  const adHocActualHours = useMemo(() => {
-    return entries
-      .filter((e) => e.date >= format(currentPeriod.startDate, "yyyy-MM-dd") && e.date <= format(currentPeriod.endDate, "yyyy-MM-dd") && e.adhocJobId)
-      .reduce((s, e) => s + e.hours, 0);
-  }, [entries, currentPeriod]);
+  type RecapSortKey = 'name' | 'volume' | 'variance' | 'budget' | 'cleaner';
+  const [recapSortBy, setRecapSortBy] = useState<RecapSortKey>('name');
+  const [recapSortDir, setRecapSortDir] = useState<'asc' | 'desc'>('asc');
+
+  // Map primary assigned cleaner name per site for quick lookup in the portfolio table
+  const primaryCleanerNameBySiteId = useMemo(() => {
+    const map: Record<string, string> = {};
+    sites.forEach((site) => {
+      const assignedIds = site.assigned_cleaner_ids ?? [];
+      if (assignedIds.length === 0) return;
+      const primaryId = assignedIds[0];
+      const cleaner = cleaners.find((c) => c.id === primaryId);
+      if (cleaner) {
+        const fullName = `${cleaner.firstName} ${cleaner.lastName}`.trim();
+        map[site.id] = fullName || cleaner.firstName || cleaner.lastName || "";
+      }
+    });
+    return map;
+  }, [sites, cleaners]);
 
   // Pre-process entries into a map for efficient lookups
   const siteDailyMap = useMemo(() => {
@@ -169,8 +200,23 @@ const Dashboard: React.FC<DashboardProps> = ({ sites, cleaners, entries, current
       
       // Fortnightly Revenue = (Monthly * 12) / 26
       const fortnightRevenue = (site.monthly_revenue * 12) / 26;
-      const budgetLabourRate = site.budget_labour_rate ?? 0;
-      const budgetedLabourCost = budgetHoursTotal * budgetLabourRate;
+      const weekdayRate = site.budget_weekday_labour_rate ?? site.budget_labour_rate ?? 0;
+      const saturdayRate = site.budget_saturday_labour_rate ?? weekdayRate;
+      const sundayRate = site.budget_sunday_labour_rate ?? weekdayRate;
+      const phRate = site.budget_ph_labour_rate ?? weekdayRate;
+      const dailyBudgets = site.daily_budgets ?? [0, 0, 0, 0, 0, 0, 0]; // [Sun, Mon, ..., Sat]
+      // Date-aware budget: each day in the period uses PH / Sat / Sun / Weekday rate so budget matches actuals
+      const phInPeriod = getPublicHolidaysInRange(currentPeriod.startDate, currentPeriod.endDate);
+      const budgetedLabourCost = computeBudgetedLabourCostForRange({
+        startDate: currentPeriod.startDate,
+        endDate: currentPeriod.endDate,
+        dailyBudgets,
+        weekdayRate,
+        saturdayRate,
+        sundayRate,
+        phRate,
+        publicHolidayDates: phInPeriod,
+      });
       const grossProfit = fortnightRevenue - laborCostTotal;
       const margin = fortnightRevenue > 0 ? (grossProfit / fortnightRevenue) * 100 : 0;
 
@@ -220,6 +266,39 @@ const Dashboard: React.FC<DashboardProps> = ({ sites, cleaners, entries, current
     };
   }, [kpiMetrics, financialMetrics]);
 
+  const sortedRecap = useMemo(() => {
+    const list = [...financialMetrics.recap];
+    list.sort((a, b) => {
+      let cmp = 0;
+      if (recapSortBy === 'name') {
+        const na = (a.name || '').toLowerCase();
+        const nb = (b.name || '').toLowerCase();
+        cmp = na.localeCompare(nb);
+      } else if (recapSortBy === 'volume') {
+        cmp = a.actualHoursTotal - b.actualHoursTotal;
+      } else if (recapSortBy === 'variance') {
+        cmp = a.varianceHours - b.varianceHours;
+      } else if (recapSortBy === 'budget') {
+        cmp = a.budgetedLabourCost - b.budgetedLabourCost;
+      } else if (recapSortBy === 'cleaner') {
+        const ca = (primaryCleanerNameBySiteId[a.id] || '').toLowerCase();
+        const cb = (primaryCleanerNameBySiteId[b.id] || '').toLowerCase();
+        cmp = ca.localeCompare(cb);
+      }
+      return recapSortDir === 'asc' ? cmp : -cmp;
+    });
+    return list;
+  }, [financialMetrics.recap, recapSortBy, recapSortDir, primaryCleanerNameBySiteId]);
+
+  const handleRecapSort = (key: RecapSortKey) => {
+    if (recapSortBy === key) {
+      setRecapSortDir((d) => (d === 'asc' ? 'desc' : 'asc'));
+    } else {
+      setRecapSortBy(key);
+      setRecapSortDir(key === 'name' || key === 'cleaner' ? 'asc' : 'desc');
+    }
+  };
+
   return (
     <div className="space-y-6 sm:space-y-8 animate-fadeIn">
       {/* Financial KPIs (Admin only) */}
@@ -230,49 +309,77 @@ const Dashboard: React.FC<DashboardProps> = ({ sites, cleaners, entries, current
               {kpiError}
             </p>
           )}
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 sm:gap-4">
-            <div className="bg-[#f7f6f3] p-5 rounded-lg border border-[#edeef0]">
-              <p className="text-[11px] font-bold text-gray-400 uppercase tracking-wider mb-1">Portfolio Revenue</p>
-              {kpiLoading ? (
-                <h3 className="text-2xl font-bold text-gray-400">Loading…</h3>
-              ) : (
-                <h3 className="text-2xl font-bold text-gray-900">
-                  {formatCurrencyAUD(displayMetrics.portfolioRevenue)}
-                </h3>
-              )}
-            </div>
-            <div className="bg-[#f7f6f3] p-5 rounded-lg border border-[#edeef0]">
-              <p className="text-[11px] font-bold text-gray-400 uppercase tracking-wider mb-1">Labor Expenses</p>
-              {kpiLoading ? (
-                <h3 className="text-2xl font-bold text-gray-400">Loading…</h3>
-              ) : (
-                <h3 className="text-2xl font-bold text-red-600">
-                  {formatCurrencyAUDSignedExpense(displayMetrics.laborExpenses)}
-                </h3>
-              )}
-            </div>
-            <div className="bg-[#f7f6f3] p-5 rounded-lg border border-[#edeef0]">
-              <p className="text-[11px] font-bold text-gray-400 uppercase tracking-wider mb-1">Net Gross Profit</p>
-              {kpiLoading ? (
-                <h3 className="text-2xl font-bold text-gray-400">Loading…</h3>
-              ) : (
-                <h3 className="text-2xl font-bold text-green-700">
-                  {formatCurrencyAUD(displayMetrics.netGrossProfit)}
-                </h3>
-              )}
-            </div>
-            <div className="bg-[#f7f6f3] p-5 rounded-lg border border-[#edeef0]">
-              <p className="text-[11px] font-bold text-gray-400 uppercase tracking-wider mb-1">Profit Margin</p>
-              {kpiLoading ? (
-                <h3 className="text-2xl font-bold text-gray-400">Loading…</h3>
-              ) : (
-                <div className="flex items-center gap-2">
-                  <h3 className="text-2xl font-bold text-gray-900">
-                    {formatPercent(displayMetrics.profitMargin)}
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+            <div className="so-card-soft px-5 py-5 flex items-start gap-3">
+              <div className="mt-1 rounded-lg bg-[#ECF3F4] text-[#3E5F6A] p-2">
+                <DollarSign size={16} />
+              </div>
+              <div className="space-y-1">
+                <p className="text-[11px] font-semibold text-gray-500 uppercase tracking-[0.18em]">
+                  Portfolio Revenue
+                </p>
+                {kpiLoading ? (
+                  <h3 className="text-[24px] font-semibold text-gray-400 leading-tight">Loading…</h3>
+                ) : (
+                  <h3 className="text-[24px] font-semibold text-gray-900 leading-tight">
+                    {formatCurrencyAUD(displayMetrics.portfolioRevenue)}
                   </h3>
-                  <PieChart size={18} className="text-gray-500" />
-                </div>
-              )}
+                )}
+              </div>
+            </div>
+            <div className="so-card-soft px-5 py-5 flex items-start gap-3">
+              <div className="mt-1 rounded-lg bg-[#FEF3C7] text-[#92400E] p-2">
+                <DollarSign size={16} />
+              </div>
+              <div className="space-y-1">
+                <p className="text-[11px] font-semibold text-gray-500 uppercase tracking-[0.18em]">
+                  Labor Expenses
+                </p>
+                {kpiLoading ? (
+                  <h3 className="text-[24px] font-semibold text-gray-400 leading-tight">Loading…</h3>
+                ) : (
+                  <h3 className="text-[24px] font-semibold text-red-600 leading-tight">
+                    {formatCurrencyAUDSignedExpense(displayMetrics.laborExpenses)}
+                  </h3>
+                )}
+              </div>
+            </div>
+            <div className="so-card-soft px-5 py-5 flex items-start gap-3">
+              <div className="mt-1 rounded-lg bg-[#DCFCE7] text-[#166534] p-2">
+                <Briefcase size={16} />
+              </div>
+              <div className="space-y-1">
+                <p className="text-[11px] font-semibold text-gray-500 uppercase tracking-[0.18em]">
+                  Net Gross Profit
+                </p>
+                {kpiLoading ? (
+                  <h3 className="text-[24px] font-semibold text-gray-400 leading-tight">Loading…</h3>
+                ) : (
+                  <h3 className="text-[24px] font-semibold text-emerald-700 leading-tight">
+                    {formatCurrencyAUD(displayMetrics.netGrossProfit)}
+                  </h3>
+                )}
+              </div>
+            </div>
+            <div className="so-card-soft px-5 py-5 flex items-start gap-3">
+              <div className="mt-1 rounded-lg bg-[#E0F2FE] text-[#0369A1] p-2">
+                <PieChart size={16} />
+              </div>
+              <div className="space-y-1">
+                <p className="text-[11px] font-semibold text-gray-500 uppercase tracking-[0.18em]">
+                  Profit Margin
+                </p>
+                {kpiLoading ? (
+                  <h3 className="text-[24px] font-semibold text-gray-400 leading-tight">Loading…</h3>
+                ) : (
+                  <div className="flex items-center gap-2">
+                    <h3 className="text-[24px] font-semibold text-gray-900 leading-tight">
+                      {formatPercent(displayMetrics.profitMargin)}
+                    </h3>
+                    <PieChart size={18} className="text-gray-500" />
+                  </div>
+                )}
+              </div>
             </div>
           </div>
         </>
@@ -281,26 +388,61 @@ const Dashboard: React.FC<DashboardProps> = ({ sites, cleaners, entries, current
       {/* Ad Hoc Jobs summary – visible to all */}
       {adHocStats != null && (
         <div className="space-y-2">
-          <h3 className="text-lg sm:text-xl font-bold text-gray-900 flex items-center gap-2">
+          <h3 className="text-lg sm:text-xl font-semibold text-gray-900 flex items-center gap-2">
             <Briefcase size={20} className="text-gray-500" />
             Ad Hoc Jobs this month
           </h3>
           <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-            <div className="bg-[#f7f6f3] p-4 rounded-lg border border-[#edeef0]">
-              <p className="text-[10px] font-bold text-gray-400 uppercase tracking-wider">Total</p>
-              <p className="text-xl font-bold text-gray-900">{adHocStats.total}</p>
+            <div className="so-card-soft p-4">
+              <p className="text-[10px] font-semibold text-gray-500 uppercase tracking-[0.18em]">
+                Total
+              </p>
+              <p className="text-xl font-semibold text-gray-900">
+                {adHocStats.total}
+              </p>
             </div>
-            <div className="bg-[#f7f6f3] p-4 rounded-lg border border-[#edeef0]">
-              <p className="text-[10px] font-bold text-gray-400 uppercase tracking-wider">Completed</p>
-              <p className="text-xl font-bold text-green-700">{adHocStats.completed}</p>
+            <div className="so-card-soft p-4">
+              <p className="text-[10px] font-semibold text-gray-500 uppercase tracking-[0.18em]">
+                Completed
+              </p>
+              <p className="text-xl font-semibold text-emerald-700">
+                {adHocStats.completed}
+              </p>
             </div>
-            <div className="bg-[#f7f6f3] p-4 rounded-lg border border-[#edeef0]">
-              <p className="text-[10px] font-bold text-gray-400 uppercase tracking-wider">Pending</p>
-              <p className="text-xl font-bold text-gray-700">{adHocStats.pending}</p>
+            <div className="so-card-soft p-4">
+              <p className="text-[10px] font-semibold text-gray-500 uppercase tracking-[0.18em]">
+                Pending
+              </p>
+              <p className="text-xl font-semibold text-gray-700">
+                {adHocStats.pending}
+              </p>
             </div>
-            <div className="bg-[#f7f6f3] p-4 rounded-lg border border-[#edeef0]">
-              <p className="text-[10px] font-bold text-gray-400 uppercase tracking-wider">Budgeted / Actual hrs</p>
-              <p className="text-xl font-bold text-gray-900">{adHocStats.budgetedHours.toFixed(1)}h / {adHocActualHours.toFixed(1)}h</p>
+            <div className="so-card-soft p-4">
+              {isAdmin ? (
+                <>
+                  <p className="text-[10px] font-semibold text-gray-500 uppercase tracking-[0.18em]">
+                    Revenue
+                  </p>
+                  <p className="text-xl font-semibold text-gray-900">
+                    {formatCurrencyAUD(adHocStats.revenue)}
+                  </p>
+                  <p className="mt-1 text-[10px] font-semibold text-gray-500 uppercase tracking-[0.18em]">
+                    GP
+                  </p>
+                  <p className="text-sm font-semibold text-emerald-700">
+                    {formatCurrencyAUD(adHocStats.grossProfit)}
+                  </p>
+                </>
+              ) : (
+                <>
+                  <p className="text-[10px] font-semibold text-gray-500 uppercase tracking-[0.18em]">
+                    Budgeted hrs
+                  </p>
+                  <p className="text-xl font-semibold text-gray-900">
+                    {adHocStats.budgetedHours.toFixed(1)}h
+                  </p>
+                </>
+              )}
             </div>
           </div>
         </div>
@@ -308,45 +450,101 @@ const Dashboard: React.FC<DashboardProps> = ({ sites, cleaners, entries, current
 
       {/* Site Audit Table - match Sites table styling */}
       <div className="space-y-4 sm:space-y-6">
-        <h3 className="text-lg sm:text-xl font-bold text-gray-900">Portfolio Compliance & Performance</h3>
-        <div className="border border-[#edeef0] rounded-lg bg-white shadow-sm overflow-hidden table-scroll-mobile">
-          <table className="w-full border-collapse text-left table-fixed min-w-[700px]">
+        <h3 className="text-lg sm:text-xl font-semibold text-gray-900">
+          Portfolio Compliance &amp; Performance
+        </h3>
+        <div className="so-table bg-white overflow-hidden table-scroll-mobile">
+          <table className="w-full border-collapse text-left table-fixed min-w-[760px]">
             <colgroup>
               {isAdmin ? (
                 <>
-                  <col style={{ width: '24%' }} />
-                  <col style={{ width: '12%' }} />
-                  <col style={{ width: '14%' }} />
+                  <col style={{ width: '23%' }} />
+                  <col style={{ width: '11%' }} />
+                  <col style={{ width: '13%' }} />
+                  <col style={{ width: '17%' }} />
                   <col style={{ width: '18%' }} />
-                  <col style={{ width: '22%' }} />
-                  <col style={{ width: '10%' }} />
+                  <col style={{ width: '13%' }} />
+                  <col style={{ width: '5%' }} />
                 </>
               ) : (
                 <>
                   <col style={{ width: '28%' }} />
                   <col style={{ width: '12%' }} />
                   <col style={{ width: '14%' }} />
-                  <col style={{ width: '36%' }} />
-                  <col style={{ width: '10%' }} />
+                  <col style={{ width: '28%' }} />
+                  <col style={{ width: '18%' }} />
+                  <col style={{ width: '5%' }} />
                 </>
               )}
             </colgroup>
             <thead>
-              <tr className="bg-[#fcfcfb] border-b border-[#edeef0]">
-                <th className="text-left px-1.5 py-1.5 text-[9px] font-bold text-gray-500 uppercase tracking-widest">Site Name</th>
-                <th className="text-center px-1.5 py-1.5 text-[9px] font-bold text-gray-500 uppercase tracking-widest">Volume (Hrs)</th>
-                <th className="text-center px-1.5 py-1.5 text-[9px] font-bold text-gray-500 uppercase tracking-widest">Variance</th>
-                {isAdmin && <th className="text-center px-1.5 py-1.5 text-[9px] font-bold text-gray-500 uppercase tracking-widest">Budget labour</th>}
-                <th className="text-center px-1.5 py-1.5 text-[9px] font-bold text-gray-500 uppercase tracking-widest">14D Pattern</th>
-                <th className="px-1.5 py-1.5"></th>
+              <tr className="border-b border-[#edeef0]">
+                <th className="text-left px-1.5 py-1.5">
+                  <button
+                    type="button"
+                    onClick={() => handleRecapSort('name')}
+                    className="text-[10px] font-semibold text-gray-700 uppercase tracking-widest flex items-center gap-0.5 hover:text-gray-900 focus:outline-none focus:ring-2 focus:ring-gray-900/20 rounded"
+                  >
+                    Site Name
+                    {recapSortBy === 'name' && (recapSortDir === 'asc' ? <ChevronUp size={10} /> : <ChevronDown size={10} />)}
+                  </button>
+                </th>
+                <th className="text-center px-1.5 py-1.5">
+                  <button
+                    type="button"
+                    onClick={() => handleRecapSort('volume')}
+                    className="text-[10px] font-semibold text-gray-700 uppercase tracking-widest inline-flex items-center gap-0.5 hover:text-gray-900 focus:outline-none focus:ring-2 focus:ring-gray-900/20 rounded"
+                  >
+                    Volume (Hrs)
+                    {recapSortBy === 'volume' && (recapSortDir === 'asc' ? <ChevronUp size={10} /> : <ChevronDown size={10} />)}
+                  </button>
+                </th>
+                <th className="text-center px-1.5 py-1.5">
+                  <button
+                    type="button"
+                    onClick={() => handleRecapSort('variance')}
+                    className="text-[10px] font-semibold text-gray-700 uppercase tracking-widest inline-flex items-center gap-0.5 hover:text-gray-900 focus:outline-none focus:ring-2 focus:ring-gray-900/20 rounded"
+                  >
+                    Variance
+                    {recapSortBy === 'variance' && (recapSortDir === 'asc' ? <ChevronUp size={10} /> : <ChevronDown size={10} />)}
+                  </button>
+                </th>
+                {isAdmin && (
+                  <th className="text-center px-1.5 py-1.5">
+                    <button
+                      type="button"
+                      onClick={() => handleRecapSort('budget')}
+                      className="text-[10px] font-semibold text-gray-700 uppercase tracking-widest inline-flex items-center gap-0.5 hover:text-gray-900 focus:outline-none focus:ring-2 focus:ring-gray-900/20 rounded"
+                    >
+                      Budget labour
+                      {recapSortBy === 'budget' && (recapSortDir === 'asc' ? <ChevronUp size={10} /> : <ChevronDown size={10} />)}
+                    </button>
+                  </th>
+                )}
+                <th className="text-center px-1.5 py-1.5 text-[10px] font-semibold text-gray-700 uppercase tracking-widest">14D Pattern</th>
+                <th className="text-left px-1.5 py-1.5">
+                  <button
+                    type="button"
+                    onClick={() => handleRecapSort('cleaner')}
+                    className="text-[9px] font-bold text-gray-500 uppercase tracking-widest inline-flex items-center gap-0.5 hover:text-gray-900 focus:outline-none focus:ring-2 focus:ring-gray-900/20 rounded"
+                  >
+                    Cleaner Assigned
+                    {recapSortBy === 'cleaner' && (recapSortDir === 'asc' ? <ChevronUp size={10} /> : <ChevronDown size={10} />)}
+                  </button>
+                </th>
+                <th className="px-1 py-1.5 text-right"></th>
               </tr>
             </thead>
             <tbody className="divide-y divide-[#edeef0]">
-              {financialMetrics.recap.map((recap) => (
+              {sortedRecap.map((recap) => {
+                const primaryCleanerName = primaryCleanerNameBySiteId[recap.id];
+                const variancePositive = recap.varianceHours > 0.1;
+                const varianceNegative = recap.varianceHours < -0.1;
+                return (
                 <tr 
                   key={recap.id} 
                   onClick={() => onViewSite(recap.id)}
-                  className="hover:bg-[#f7f6f3] transition-colors cursor-pointer group"
+                  className="transition-colors cursor-pointer group"
                 >
                   <td className="px-1.5 py-1.5">
                     <span className="text-xs font-semibold text-gray-900 break-words">{recap.name}</span>
@@ -355,8 +553,17 @@ const Dashboard: React.FC<DashboardProps> = ({ sites, cleaners, entries, current
                     <span className="text-[11px] font-medium text-gray-700">{recap.actualHoursTotal.toFixed(1)}h</span>
                   </td>
                   <td className="px-1.5 py-1.5 text-center">
-                    <span className={`text-[11px] font-bold ${recap.varianceHours > 0.1 ? 'text-red-600' : 'text-green-600'}`}>
-                      {recap.varianceHours > 0.1 ? '+' : ''}{recap.varianceHours.toFixed(1)}h
+                    <span
+                      className={`inline-flex items-center justify-center px-2 py-0.5 rounded-full text-[10px] font-semibold ${
+                        variancePositive
+                          ? 'bg-red-50 text-red-700'
+                          : varianceNegative
+                          ? 'bg-emerald-50 text-emerald-700'
+                          : 'bg-gray-50 text-gray-600'
+                      }`}
+                    >
+                      {variancePositive ? '+' : ''}
+                      {recap.varianceHours.toFixed(1)}h
                     </span>
                   </td>
                   {isAdmin && (
@@ -371,11 +578,20 @@ const Dashboard: React.FC<DashboardProps> = ({ sites, cleaners, entries, current
                       actualsByDate={recap.dailyActuals}
                     />
                   </td>
-                  <td className="px-1.5 py-1.5 text-right">
-                    <ChevronRight size={14} className="text-gray-300 group-hover:text-gray-900 transition-colors" />
+                  <td className="px-1.5 py-1.5">
+                    {primaryCleanerName ? (
+                      <span className="text-[11px] font-medium text-gray-700 break-words">
+                        {primaryCleanerName}
+                      </span>
+                    ) : (
+                      <span className="text-[10px] text-gray-400">—</span>
+                    )}
+                  </td>
+                  <td className="px-1 py-1.5 text-right align-middle">
+                    <ChevronRight size={12} className="text-gray-300 group-hover:text-gray-900 transition-colors inline-block" />
                   </td>
                 </tr>
-              ))}
+              ); })}
             </tbody>
           </table>
         </div>

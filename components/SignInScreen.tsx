@@ -22,40 +22,50 @@ const SignInScreen: React.FC = () => {
   }
 
   return (
-    <div className="min-h-screen flex bg-white">
+    <div className="min-h-screen flex bg-[#F6F7F8]">
       {/* Left: sign-in form — wider column, content vertically centered */}
-      <div className="flex flex-col min-h-screen w-full lg:w-[55%] lg:max-w-[720px] p-8 md:p-12">
+      <div className="flex flex-col min-h-screen w-full lg:w-[55%] lg:max-w-[720px] px-8 md:px-12 py-8">
         <div className="flex-1 flex flex-col justify-center items-center">
           <div className="w-full max-w-sm">
-            <div className="flex items-center gap-2 mb-10">
-              <div className="w-9 h-9 rounded-lg bg-gray-900 flex items-center justify-center text-white font-bold text-lg">
+            <div className="flex items-center gap-3 mb-10">
+              <div className="w-9 h-9 rounded-xl bg-[#111827] flex items-center justify-center text-white font-semibold text-lg shadow-sm">
                 CT
               </div>
-              <span className="text-xl font-semibold text-gray-900">CleanTrack Ops</span>
+              <div className="flex flex-col">
+                <span className="text-[18px] font-semibold text-gray-900">
+                  CleanTrack Ops
+                </span>
+                <span className="text-[13px] text-gray-500">
+                  Slate Ops · Operational control centre
+                </span>
+              </div>
             </div>
 
-          <h1 className="text-2xl font-bold text-gray-900 mb-1">Log in</h1>
-          <p className="text-sm text-gray-500 mb-8">
-            Sign in with your organisation’s Microsoft account to continue.
-          </p>
+            <h1 className="text-[26px] font-semibold text-gray-900 mb-2">
+              Sign in to workspace
+            </h1>
+            <p className="text-[14px] text-gray-500 mb-8">
+              Use your organisation’s Microsoft account to access timesheets, sites
+              and audits.
+            </p>
 
-          {isMicrosoftAuthConfigured ? (
-            <button
-              type="button"
-              onClick={() => signInWithMicrosoft()}
-              className="w-full flex items-center justify-center gap-3 py-3 px-4 rounded-xl border-2 border-gray-200 bg-white text-gray-900 font-semibold hover:bg-gray-50 hover:border-gray-300 transition-colors active:scale-[0.99]"
-            >
-              <MicrosoftLogo />
-              Log in with Microsoft
-            </button>
-          ) : (
-            <div className="rounded-xl bg-amber-50 border border-amber-200 p-4 text-sm text-amber-800">
-              Microsoft sign-in is not configured. Set VITE_AZURE_AD_CLIENT_ID and
-              VITE_AZURE_AD_TENANT_ID to enable log in.
-            </div>
-          )}
+            {isMicrosoftAuthConfigured ? (
+              <button
+                type="button"
+                onClick={() => signInWithMicrosoft()}
+                className="w-full flex items-center justify-center gap-3 py-3 px-4 so-btn-primary text-[14px] font-medium shadow-sm active:scale-[0.99] transition-transform"
+              >
+                <MicrosoftLogo />
+                Log in with Microsoft
+              </button>
+            ) : (
+              <div className="rounded-xl bg-amber-50 border border-amber-200 p-4 text-sm text-amber-800">
+                Microsoft sign-in is not configured. Set VITE_AZURE_AD_CLIENT_ID and
+                VITE_AZURE_AD_TENANT_ID to enable log in.
+              </div>
+            )}
 
-            {DEV_SHOW_LEGACY_LOGIN && (
+          {DEV_SHOW_LEGACY_LOGIN && (
             <button
               type="button"
               onClick={() => setShowLegacy(true)}
@@ -67,26 +77,31 @@ const SignInScreen: React.FC = () => {
           </div>
         </div>
 
-        <p className="text-xs text-gray-400 py-4">
-          © {new Date().getFullYear()} All Rights Reserved. Privacy and Terms.
+        <p className="text-[11px] text-gray-400 py-4">
+          © {new Date().getFullYear()} Adept Services · Internal operations platform
         </p>
       </div>
 
-      {/* Right: decorative panel — charcoal, centered tagline, "a" scaled down, right-aligned so front of letter shows */}
-      <div className="hidden lg:flex flex-1 relative bg-[#2C2C2C] overflow-hidden">
-        <div className="absolute inset-0 flex items-center justify-center p-12 z-10">
-          <p className="text-gray-300 font-medium text-lg text-center max-w-xs">
-            Enterprise cleaning audit and timesheet management
-          </p>
-        </div>
-        <div className="absolute -bottom-[1%] -right-[10%] w-[100vmin] h-[100vmin]">
-          <img
-            src="/logo-a.png"
-            alt=""
-            className="w-full h-full object-contain object-bottom object-right select-none pointer-events-none mix-blend-screen"
-            style={{ opacity: 0.2 }}
-            aria-hidden
+      {/* Right: brand panel — Slate Ops motif */}
+      <div className="hidden lg:flex flex-1 relative bg-[#111827] overflow-hidden">
+        <div className="absolute inset-0 opacity-[0.65]" aria-hidden>
+          <div
+            className="w-full h-full"
+            style={{
+              backgroundImage:
+                'radial-gradient(circle at 0% 0%, rgba(148,163,184,0.18) 0, transparent 45%), radial-gradient(circle at 80% 20%, rgba(56,189,248,0.18) 0, transparent 40%), linear-gradient(135deg, #020617 0%, #0f172a 40%, #020617 100%)',
+            }}
           />
+        </div>
+        <div className="absolute inset-0 flex items-center justify-center p-12 z-10">
+          <div className="max-w-xs text-center space-y-3">
+            <p className="text-slate-100 font-medium text-lg">
+              Operational control for cleaning, timesheets and compliance.
+            </p>
+            <p className="text-[12px] text-slate-300">
+              Built for managers and audits — not another generic portal.
+            </p>
+          </div>
         </div>
       </div>
     </div>

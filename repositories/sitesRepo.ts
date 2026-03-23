@@ -5,19 +5,30 @@ const SITES_LIST_NAME = "CleanTrack Sites";
 /** Optional budget for toAppSite (SiteBudgetHours from budgetsRepo). */
 export type SiteBudgetForApp = {
   fortnightCap: number;
-  sunday: number;
-  monday: number;
-  tuesday: number;
-  wednesday: number;
-  thursday: number;
-  friday: number;
-  saturday: number;
+  sunday?: number;
+  monday?: number;
+  tuesday?: number;
+  wednesday?: number;
+  thursday?: number;
+  friday?: number;
+  saturday?: number;
+  /** Optional Week 2 hours when Visit Frequency is Fortnightly. */
+  week2Sunday?: number;
+  week2Monday?: number;
+  week2Tuesday?: number;
+  week2Wednesday?: number;
+  week2Thursday?: number;
+  week2Friday?: number;
+  week2Saturday?: number;
   visitFrequency?: string;
   /** Hourly rates for budgeted labour ($/hr). */
   weekdayLabourRate?: number;
   saturdayLabourRate?: number;
   sundayLabourRate?: number;
   phLabourRate?: number;
+  /** @deprecated Legacy SharePoint column; merged into weekday / weekend in UI. */
+  budgetLabourRate?: number;
+  weekendLabourRate?: number;
 };
 
 /** Display name -> internal name. Cached in-memory. */
@@ -30,6 +41,18 @@ export interface Site {
   state: string;
   active: boolean;
   monthlyRevenue: number | null;
+  noServicePeriods?: SiteNoServicePeriod[];
+}
+
+export interface SiteNoServicePeriod {
+  label?: string;
+  start_date: string;
+  end_date: string;
+  reason?: string;
+  /** "manual" | "school_holidays_auto" — optional for backward compatibility */
+  source?: string;
+  state?: string;
+  year?: number;
 }
 
 function getField<T>(fields: Record<string, unknown>, ...keys: string[]): T | undefined {
@@ -63,6 +86,71 @@ function getNumber(fields: Record<string, unknown>, ...keys: string[]): number |
   return Number.isNaN(n) ? null : n;
 }
 
+function normalizeNoServicePeriod(p: unknown): SiteNoServicePeriod | null {
+  if (!p || typeof p !== "object") return null;
+  const o = p as Record<string, unknown>;
+  const start = String(o.start_date ?? "").trim();
+  const end = String(o.end_date ?? "").trim();
+  if (!start || !end) return null;
+  const label = String(o.label ?? "").trim();
+  const reason = String(o.reason ?? "").trim();
+  const source = String(o.source ?? "").trim();
+  const state = String(o.state ?? "").trim();
+  let year: number | undefined;
+  const yr = o.year;
+  if (typeof yr === "number" && !Number.isNaN(yr)) year = yr;
+  else if (typeof yr === "string" && yr.trim()) {
+    const n = parseInt(yr, 10);
+    if (!Number.isNaN(n)) year = n;
+  }
+  return {
+    start_date: start,
+    end_date: end,
+    ...(label ? { label } : {}),
+    ...(reason ? { reason } : {}),
+    ...(source ? { source } : {}),
+    ...(state ? { state } : {}),
+    ...(year !== undefined ? { year } : {}),
+  };
+}
+
+/** Display names we accept (SharePoint column display name → internal name via map). Includes common typos. */
+const NO_SERVICE_PERIODS_DISPLAY_NAMES = [
+  "No Service Periods",
+  "NoServicePeriods",
+  "No Service Perioids",
+  "No Service Periouds",
+] as const;
+
+function resolveNoServicePeriodsFieldKey(map: Record<string, string>): string | undefined {
+  for (const name of NO_SERVICE_PERIODS_DISPLAY_NAMES) {
+    const internal = map[name];
+    if (internal) return internal;
+  }
+  return undefined;
+}
+
+function parseNoServicePeriods(
+  fields: Record<string, unknown>,
+  map: Record<string, string>
+): SiteNoServicePeriod[] {
+  const key = resolveNoServicePeriodsFieldKey(map);
+  if (!key) return [];
+  const raw = getField<unknown>(fields, key);
+  if (raw == null || raw === "") return [];
+  let arr: unknown[] = [];
+  if (Array.isArray(raw)) arr = raw;
+  else if (typeof raw === "string") {
+    try {
+      const parsed = JSON.parse(raw);
+      if (Array.isArray(parsed)) arr = parsed;
+    } catch {
+      arr = [];
+    }
+  }
+  return arr.map(normalizeNoServicePeriod).filter((x): x is SiteNoServicePeriod => !!x);
+}
+
 function requireMapKey(map: Record<string, string>, displayName: string): string {
   const internal = map[displayName];
   if (!internal) {
@@ -94,6 +182,7 @@ function itemToSite(item: sharepoint.GraphListItem, map: Record<string, string>)
       "Monthly_x0020_Revenue",
       "Monthly Revenue"
     ),
+    noServicePeriods: parseNoServicePeriods(fields, map),
   };
 }
 
@@ -141,6 +230,7 @@ export interface SitePayload {
   state?: string;
   active?: boolean;
   monthlyRevenue?: number | null;
+  noServicePeriods?: SiteNoServicePeriod[];
 }
 
 /** Build fields object using internal column names. Throws if a required display name is missing from map.
@@ -172,6 +262,15 @@ function payloadToFields(
     if (k) {
       const val = payload.monthlyRevenue;
       fields[k] = val == null ? null : Math.round(Number(val) * 100) / 100;
+    }
+  }
+  if (payload.noServicePeriods !== undefined) {
+    const k = resolveNoServicePeriodsFieldKey(map);
+    if (k) {
+      const cleaned = payload.noServicePeriods
+        .map((p) => normalizeNoServicePeriod(p))
+        .filter((x): x is SiteNoServicePeriod => !!x);
+      fields[k] = cleaned.length > 0 ? JSON.stringify(cleaned) : null;
     }
   }
   return fields;
@@ -231,6 +330,7 @@ export function toAppSite(
   monthly_revenue: number;
   budgeted_hours_per_fortnight: number;
   daily_budgets: number[];
+  daily_budgets_week2?: number[];
   assigned_cleaner_ids: string[];
   financial_budget: number;
   cleaner_rates: Record<string, number>;
@@ -240,11 +340,41 @@ export function toAppSite(
   budget_saturday_labour_rate?: number;
   budget_sunday_labour_rate?: number;
   budget_ph_labour_rate?: number;
+  no_service_periods?: SiteNoServicePeriod[];
 } {
   const fortnightHours = budget ? budget.fortnightCap : 0;
   const dailyBudgets = budget
-    ? [budget.sunday, budget.monday, budget.tuesday, budget.wednesday, budget.thursday, budget.friday, budget.saturday]
+    ? [
+        budget.sunday ?? 0,
+        budget.monday ?? 0,
+        budget.tuesday ?? 0,
+        budget.wednesday ?? 0,
+        budget.thursday ?? 0,
+        budget.friday ?? 0,
+        budget.saturday ?? 0,
+      ]
     : [0, 0, 0, 0, 0, 0, 0];
+  const dailyBudgetsWeek2 =
+    budget &&
+    [
+      budget.week2Sunday,
+      budget.week2Monday,
+      budget.week2Tuesday,
+      budget.week2Wednesday,
+      budget.week2Thursday,
+      budget.week2Friday,
+      budget.week2Saturday,
+    ].some((v) => v != null)
+      ? [
+          budget.week2Sunday ?? 0,
+          budget.week2Monday ?? 0,
+          budget.week2Tuesday ?? 0,
+          budget.week2Wednesday ?? 0,
+          budget.week2Thursday ?? 0,
+          budget.week2Friday ?? 0,
+          budget.week2Saturday ?? 0,
+        ]
+      : undefined;
   return {
     id: s.id,
     name: s.siteName,
@@ -253,6 +383,7 @@ export function toAppSite(
     monthly_revenue: s.monthlyRevenue ?? 0,
     budgeted_hours_per_fortnight: fortnightHours,
     daily_budgets: dailyBudgets,
+    ...(dailyBudgetsWeek2 ? { daily_budgets_week2: dailyBudgetsWeek2 } : {}),
     assigned_cleaner_ids: [],
     financial_budget: 0,
     cleaner_rates: {},
@@ -263,5 +394,6 @@ export function toAppSite(
     ...(budget?.saturdayLabourRate != null && budget.saturdayLabourRate >= 0 && { budget_saturday_labour_rate: budget.saturdayLabourRate }),
     ...(budget?.sundayLabourRate != null && budget.sundayLabourRate >= 0 && { budget_sunday_labour_rate: budget.sundayLabourRate }),
     ...(budget?.phLabourRate != null && budget.phLabourRate >= 0 && { budget_ph_labour_rate: budget.phLabourRate }),
+    ...(s.noServicePeriods && s.noServicePeriods.length > 0 && { no_service_periods: s.noServicePeriods }),
   };
 }

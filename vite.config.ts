@@ -18,6 +18,10 @@ export default defineConfig(({ mode }) => {
         alias: {
           '@': path.resolve(__dirname, '.'),
         }
-      }
+      },
+      optimizeDeps: {
+        // CJS + large bundle: force stable prebundle in dev (avoids broken dynamic import chunks).
+        include: ['xlsx-js-style'],
+      },
     };
 });

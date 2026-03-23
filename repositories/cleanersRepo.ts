@@ -13,6 +13,27 @@ export interface CleanerItem {
   bsb: string;
   accountNumber: string;
   active: boolean;
+  type: "cleaner" | "contractor";
+}
+
+/** Graph/SharePoint may return a string or a wrapped choice value. */
+function coerceChoiceString(v: unknown): string {
+  if (v == null) return "";
+  if (typeof v === "object" && v !== null && "value" in v) {
+    const inner = (v as { value?: unknown }).value;
+    return inner == null ? "" : String(inner).trim();
+  }
+  return String(v).trim();
+}
+
+function normalizeWorkerType(v: unknown): "cleaner" | "contractor" {
+  const s = coerceChoiceString(v).toLowerCase();
+  return s === "contractor" ? "contractor" : "cleaner";
+}
+
+/** SharePoint Choice options use title case; app model uses lowercase. */
+function workerTypeToSharePointChoice(t: "cleaner" | "contractor"): string {
+  return t === "contractor" ? "Contractor" : "Cleaner";
 }
 
 function getField<T>(fields: Record<string, unknown>, ...keys: string[]): T | undefined {
@@ -66,6 +87,10 @@ function itemToCleaner(item: sharepoint.GraphListItem, map: Record<string, strin
   const bsbKey = map["BSB"] ?? "BSB";
   const accountNumKey = map["Account Number"] ?? "Account Number";
   const activeKey = map["Active"] ?? "Active";
+  const workerTypeInternal = map["Worker Type"];
+  const rawWorkerType = workerTypeInternal
+    ? getField<unknown>(fields, workerTypeInternal)
+    : getField<unknown>(fields, "Worker_x0020_Type");
   return {
     id: item.id,
     cleanerName,
@@ -74,6 +99,7 @@ function itemToCleaner(item: sharepoint.GraphListItem, map: Record<string, strin
     bsb: getString(fields, bsbKey, "BSB"),
     accountNumber: getString(fields, accountNumKey, "Account_x0020_Number", "Account Number"),
     active: getBoolean(fields, activeKey, true),
+    type: normalizeWorkerType(rawWorkerType),
   };
 }
 
@@ -112,6 +138,7 @@ export interface CleanerPayload {
   bsb?: string;
   accountNumber?: string;
   active?: boolean;
+  type?: "cleaner" | "contractor";
 }
 
 /** Build fields using internal names. Never send LinkTitle; use Title for cleaner name. */
@@ -145,6 +172,10 @@ function payloadToFields(
     const k = map["Active"];
     if (k) fields[k] = payload.active;
   }
+  if (payload.type !== undefined) {
+    const k = map["Worker Type"];
+    if (k) fields[k] = workerTypeToSharePointChoice(payload.type);
+  }
   return fields;
 }
 
@@ -160,6 +191,7 @@ export async function createCleaner(accessToken: string, payload: CleanerPayload
       bsb: payload.bsb ?? "",
       accountNumber: payload.accountNumber ?? "",
       active: payload.active !== false,
+      type: payload.type ?? "cleaner",
     },
     map
   );

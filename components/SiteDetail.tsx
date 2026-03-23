@@ -93,6 +93,18 @@ const SiteDetail: React.FC<SiteDetailProps> = ({ site, cleaners, entries, curren
 
   const budgetedHoursPerFortnight = (site as any).budgeted_hours_per_fortnight ?? (site as any).budgetedHoursPerFortnight ?? 0;
   const dailyBudgetsArr = (site as any).daily_budgets ?? (site as any).dailyBudgets ?? [];
+  const dailyBudgetsWeek2Arr = (site as any).daily_budgets_week2 ?? (site as any).dailyBudgetsWeek2 ?? [];
+
+  const getPlannedForIndex = useMemo(() => {
+    const visit = String((site as any).visit_frequency ?? (site as any).visitFrequency ?? "").trim().toLowerCase();
+    const hasWeek2 = Array.isArray(dailyBudgetsWeek2Arr) && dailyBudgetsWeek2Arr.length >= 7;
+    return (dateIndex: number, dayOfWeek: number) => {
+      if (visit === "monthly") return 0;
+      const arr =
+        visit === "fortnightly" && hasWeek2 && dateIndex >= 7 ? dailyBudgetsWeek2Arr : dailyBudgetsArr;
+      return (arr?.[dayOfWeek] ?? 0) as number;
+    };
+  }, [site, dailyBudgetsArr, dailyBudgetsWeek2Arr]);
 
   const availableCleanersForAssignment = useMemo(() => {
     const activeAssignedIds = new Set(
@@ -178,7 +190,7 @@ const SiteDetail: React.FC<SiteDetailProps> = ({ site, cleaners, entries, curren
         .filter(e => e.date === dayStr)
         .reduce((sum, e) => sum + e.hours, 0);
 
-      const dayBudget = dailyBudgetsArr[dayOfWeek] ?? 0;
+      const dayBudget = getPlannedForIndex(i, dayOfWeek);
       const isScheduled = dayBudget > 0;
 
       stats.push({
@@ -191,7 +203,7 @@ const SiteDetail: React.FC<SiteDetailProps> = ({ site, cleaners, entries, curren
       });
     }
     return stats;
-  }, [site, periodEntries, currentPeriod, dailyBudgetsArr]);
+  }, [site, periodEntries, currentPeriod, dailyBudgetsArr, getPlannedForIndex]);
 
   const totalActualHours = periodEntries.reduce((sum, e) => sum + e.hours, 0);
   const hourVariance = totalActualHours - budgetedHoursPerFortnight;

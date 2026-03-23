@@ -12,14 +12,13 @@ import AuthTest from './components/AuthTest';
 import SignInScreen from './components/SignInScreen';
 import UnauthorizedScreen from './components/UnauthorizedScreen';
 import { DevBypassBanner } from './components/DevBypassBanner';
-import { Site, Cleaner, ViewType, FortnightPeriod, TimeBatch, TimeEntry } from './types';
+import { Site, Cleaner, ViewType, FortnightPeriod, TimeEntry } from './types';
 import { getFortnightForDate } from './utils';
 import { ChevronLeft, ChevronRight, Loader2, Menu } from 'lucide-react';
-import { format } from 'date-fns';
+import { format, addDays } from 'date-fns';
 import { RoleProvider, useRole } from './contexts/RoleContext';
 import { AppAuthProvider, useAppAuth } from './contexts/AppAuthContext';
 import { DEV_BYPASS_LOGIN } from './config/authFlags';
-import { supabase } from './lib/supabase';
 import { getGraphAccessToken } from './lib/graph';
 import { getCleaners } from './repositories/cleanersRepo';
 import { getSites, toAppSite } from './repositories/sitesRepo';
@@ -67,7 +66,6 @@ const AppContent: FC = () => {
   }, [currentView]);
   const [sites, setSites] = useState<Site[]>([]);
   const [cleaners, setCleaners] = useState<Cleaner[]>([]);
-  const [batches, setBatches] = useState<TimeBatch[]>([]);
   const [graphEntries, setGraphEntries] = useState<TimeEntry[]>([]);
   const [graphEntriesLoaded, setGraphEntriesLoaded] = useState(false);
   const [currentPeriod, setCurrentPeriod] = useState<FortnightPeriod>(getFortnightForDate(new Date()));
@@ -116,54 +114,61 @@ const AppContent: FC = () => {
 
   const fetchSites = async (silent = false) => {
     if (!silent) setDataLoading(true);
-    const token = await getGraphAccessToken();
-    if (token) {
-      try {
-        let list = await getSites(token);
-        if (user?.role === 'Manager' && user?.email) {
-          const isAllSites = user.permissionScope?.trim().toLowerCase() === 'allsites';
-          if (!isAllSites) {
-            const assignedIds = await getAssignedSiteIdsForManager(token, user.email);
-            if (assignedIds.length > 0) list = list.filter((s) => assignedIds.includes(s.id));
-          }
-        }
-        const budgets = await getSiteBudgets(token).catch(() => ({}));
-        const activeAssignmentsBySite = await getActiveCleanerIdsBySite(token).catch(() => ({} as Record<string, string[]>));
-        setSites(
-          list.map((s) => {
-            const budget =
-              budgets[String(s.id)] ??
-              budgets["name:" + (s.siteName.trim() + " Budget")];
-            const appSite = toAppSite(s, budget) as Site;
-            const assignedIds = activeAssignmentsBySite[s.id] ?? [];
-            const withAssignments: Site = {
-              ...appSite,
-              assigned_cleaner_ids: assignedIds,
-            };
-            return withAssignments;
-          })
-        );
-        setDataLoading(false);
+    try {
+      const token = await getGraphAccessToken();
+      if (!token) {
+        setSites([]);
         return;
-      } catch {
-        // fallback to Supabase
       }
+      let list = await getSites(token);
+      if (user?.role === 'Manager' && user?.email) {
+        const isAllSites = user.permissionScope?.trim().toLowerCase() === 'allsites';
+        if (!isAllSites) {
+          const assignedIds = await getAssignedSiteIdsForManager(token, user.email);
+          if (assignedIds.length > 0) list = list.filter((s) => assignedIds.includes(s.id));
+        }
+      }
+      const budgets = await getSiteBudgets(token).catch(() => ({}));
+      const activeAssignmentsBySite = await getActiveCleanerIdsBySite(token).catch(() => ({} as Record<string, string[]>));
+      setSites(
+        list.map((s) => {
+          const budget =
+            budgets[String(s.id)] ??
+            budgets["name:" + (s.siteName.trim() + " Budget")];
+          const appSite = toAppSite(s, budget) as Site;
+          const assignedIds = activeAssignmentsBySite[s.id] ?? [];
+          const withAssignments: Site = {
+            ...appSite,
+            assigned_cleaner_ids: assignedIds,
+          };
+          return withAssignments;
+        })
+      );
+    } catch (e) {
+      console.error("fetchSites failed", e);
+      setSites([]);
+    } finally {
+      if (!silent) setDataLoading(false);
     }
-    const { data, error } = await supabase.from('sites').select(`
-      *,
-      managers:site_managers(active, profiles(*))
-    `);
-    if (!error) setSites(data as any[]);
-    setDataLoading(false);
   };
 
+  // Do not depend on currentPeriod here: refetching sites sets dataLoading and unmounts the main view,
+  // which resets Timesheets drill-in state (active site) when the user changes fortnight with the header chevrons.
   useEffect(() => {
     if (role || DEV_BYPASS_LOGIN || isAppAuthenticated) {
       fetchSites();
       fetchCleaners();
-      fetchBatches();
     }
-  }, [role, currentPeriod.id, isAppAuthenticated, user?.role, user?.email]);
+  }, [role, isAppAuthenticated, user?.role, user?.email]);
+
+  /** Load current + prior fortnight so Timesheets can copy from the previous period without a second request. */
+  const timesheetFetchRange = React.useMemo(
+    () => ({
+      start: addDays(currentPeriod.startDate, -14),
+      end: new Date(currentPeriod.endDate.getTime() + 24 * 60 * 60 * 1000),
+    }),
+    [currentPeriod.startDate.getTime(), currentPeriod.endDate.getTime()]
+  );
 
   useEffect(() => {
     let cancelled = false;
@@ -173,71 +178,40 @@ const AppContent: FC = () => {
         if (!cancelled) setGraphEntries([]);
         return;
       }
-      const range = {
-        start: currentPeriod.startDate,
-        end: new Date(currentPeriod.endDate.getTime() + 24 * 60 * 60 * 1000),
-      };
-      getTimesheetEntriesForRange(token, range).then((entries) => {
+      getTimesheetEntriesForRange(token, timesheetFetchRange).then((entries) => {
         if (cancelled) return;
         setGraphEntries(entries.map((e) => mapFlatEntryToAppEntry(e)));
         setGraphEntriesLoaded(true);
       }).catch(() => { if (!cancelled) setGraphEntriesLoaded(false); });
     });
     return () => { cancelled = true; };
-  }, [currentPeriod.startDate.getTime(), currentPeriod.endDate.getTime(), mapFlatEntryToAppEntry]);
+  }, [timesheetFetchRange.start.getTime(), timesheetFetchRange.end.getTime(), mapFlatEntryToAppEntry]);
 
   const fetchCleaners = async () => {
     const token = await getGraphAccessToken();
-    if (token) {
-      try {
-        const items = await getCleaners(token);
-        setCleaners(
-          items.map((c) => {
-            const parts = c.cleanerName.trim().split(/\s+/);
-            const firstName = parts[0] ?? c.cleanerName;
-            const lastName = parts.slice(1).join(" ") ?? "";
-            return {
-              id: c.id,
-              firstName,
-              lastName,
-              email: "",
-              phone: "",
-              bankAccountName: c.accountName,
-              bankBsb: c.bsb,
-              bankAccountNumber: c.accountNumber,
-              payRatePerHour: c.payRatePerHour,
-            } as Cleaner;
-          })
-        );
-        return;
-      } catch {
-        // fallback to Supabase if Graph fails
-      }
+    if (!token) {
+      setCleaners([]);
+      return;
     }
-    const { data, error } = await supabase.from('cleaners').select('*');
-    if (!error) setCleaners(data.map(c => ({
-      ...c,
-      firstName: c.first_name,
-      lastName: c.last_name,
-      bankAccountName: c.bank_account_name,
-      bankBsb: c.bank_bsb,
-      bankAccountNumber: c.bank_account_number,
-      payRatePerHour: c.pay_rate_per_hour
-    })));
-  };
-
-  const fetchBatches = async () => {
-    const { data, error } = await supabase.from('timesheet_batches').select(`
-      *,
-      editor:profiles(full_name),
-      entries:timesheet_entries(*)
-    `)
-    .eq('fortnight_start', format(currentPeriod.startDate, 'yyyy-MM-dd'));
-
-    if (!error) setBatches(data.map(b => ({
-      ...b,
-      editor_name: b.editor?.full_name
-    })));
+    const items = await getCleaners(token);
+    setCleaners(
+      items.map((c) => {
+        const parts = c.cleanerName.trim().split(/\s+/);
+        const firstName = parts[0] ?? c.cleanerName;
+        const lastName = parts.slice(1).join(" ") ?? "";
+        return {
+          id: c.id,
+          firstName,
+          lastName,
+          email: "",
+          phone: "",
+          bankAccountName: c.accountName,
+          bankBsb: c.bsb,
+          bankAccountNumber: c.accountNumber,
+          payRatePerHour: c.payRatePerHour,
+        } as Cleaner;
+      })
+    );
   };
 
   if (loading && !DEV_BYPASS_LOGIN && !isAppAuthenticated) return <div className="h-screen flex items-center justify-center bg-gray-50"><Loader2 className="animate-spin text-gray-400" /></div>;
@@ -284,7 +258,7 @@ const AppContent: FC = () => {
       setGraphEntriesLoaded(true);
 
       // 2. Refetch from SharePoint and merge server data (server wins per key) so we get real IDs
-      getTimesheetEntriesForRange(token, range)
+      getTimesheetEntriesForRange(token, timesheetFetchRange)
         .then((entriesFromServer) => {
           const mapped = entriesFromServer.map((e) => mapFlatEntryToAppEntry(e));
           setGraphEntries((prev) => {
@@ -298,50 +272,11 @@ const AppContent: FC = () => {
       return;
     }
 
-    const { siteId, cleanerId } = newEntries[0] as any;
-    const { data: userData } = await supabase.auth.getUser();
-    const userId = userData.user?.id;
-    
-    let batch = batches.find(b => b.site_id === siteId && b.cleaner_id === cleanerId);
-    
-    if (!batch) {
-      const { data, error } = await supabase.from('timesheet_batches').insert({
-        site_id: siteId,
-        cleaner_id: cleanerId,
-        fortnight_start: format(currentPeriod.startDate, 'yyyy-MM-dd'),
-        fortnight_end: format(currentPeriod.endDate, 'yyyy-MM-dd'),
-        updated_by: userId
-      }).select().single();
-      if (error) {
-        alert('Save failed. Sign in with Microsoft to save timesheets, or configure Supabase.');
-        return;
-      }
-      batch = data;
-    }
-
-    const entriesToUpsert = newEntries.map(ne => ({
-      batch_id: batch!.id,
-      date: ne.date,
-      hours: ne.hours,
-      pay_rate_snapshot: ne.pay_rate_snapshot,
-      updated_by: userId
-    }));
-
-    const { error: upsertError } = await supabase.from('timesheet_entries').upsert(entriesToUpsert, {
-      onConflict: 'batch_id, date'
-    });
-
-    if (upsertError) alert(upsertError.message);
-    fetchBatches();
+    alert('Save failed. Sign in with Microsoft to save timesheets.');
   };
 
   const renderContent = () => {
-    const flatEntries = batches.flatMap(b => b.entries || []).map(e => ({
-      ...e,
-      siteId: batches.find(b => b.id === e.batch_id)?.site_id,
-      cleanerId: batches.find(b => b.id === e.batch_id)?.cleaner_id
-    }));
-    const entries = graphEntriesLoaded ? graphEntries : flatEntries;
+    const entries = graphEntriesLoaded ? graphEntries : [];
 
     switch (currentView) {
       case 'dashboard':
@@ -395,8 +330,9 @@ const AppContent: FC = () => {
         mobileOpen={sidebarMobileOpen}
         onMobileClose={() => setSidebarMobileOpen(false)}
       />
-      <main className="flex-1 overflow-x-hidden flex flex-col min-w-0 lg:pl-60">
-        <nav className="min-h-12 border-b border-[#E5E7EB] flex flex-wrap items-center justify-between gap-2 px-3 sm:px-6 py-2 sticky top-0 bg-[#FCFCFD]/95 backdrop-blur-md z-30">
+      <main className="flex-1 flex flex-col min-w-0 lg:pl-60">
+        {/* Sticky nav must not sit inside an overflow-x-hidden parent (breaks position:sticky). */}
+        <nav className="min-h-12 shrink-0 border-b border-[#E5E7EB] flex flex-wrap items-center justify-between gap-2 px-3 sm:px-6 py-2 sticky top-0 bg-[#FCFCFD]/95 backdrop-blur-md z-40 shadow-[0_1px_0_rgba(0,0,0,0.04)]">
           <div className="flex items-center gap-2 min-w-0">
             <button
               type="button"
@@ -407,7 +343,7 @@ const AppContent: FC = () => {
               <Menu size={20} />
             </button>
             <div className="flex items-center gap-2 text-xs sm:text-sm text-gray-500 min-w-0 truncate">
-              <span className="truncate text-gray-400">CleanTrack Ops</span>
+              <span className="truncate text-gray-400">Adept Timesheet Ops</span>
               <span className="text-gray-300">/</span>
               <span className="text-gray-900 font-medium capitalize truncate">
                 {currentView.replace('-', ' ')}
@@ -465,21 +401,27 @@ const AppContent: FC = () => {
             </button>
           </div>
         </nav>
-        <div
-          className={`flex-1 w-full mx-auto p-4 sm:p-6 lg:p-10 box-border ${
-            ['sites', 'dashboard', 'cleaners', 'team', 'adhoc-jobs'].includes(
-              currentView
-            )
-              ? 'max-w-7xl'
-              : 'max-w-5xl'
-          }`}
-        >
-          <header className="so-page-header">
-            <h1 className="text-[24px] sm:text-[30px] font-semibold text-gray-900 tracking-tight capitalize">
-              {currentView.replace('-', ' ')}
-            </h1>
-          </header>
-          {dataLoading ? <Loader2 className="animate-spin text-gray-200" /> : renderContent()}
+        <div className="flex-1 min-w-0 overflow-x-hidden">
+          <div
+            className={`flex-1 w-full mx-auto p-4 sm:p-6 lg:p-10 box-border ${
+              ['sites', 'dashboard', 'cleaners', 'team', 'adhoc-jobs'].includes(
+                currentView
+              )
+                ? 'max-w-7xl'
+                : 'max-w-5xl'
+            }`}
+          >
+            <header className="so-page-header">
+              <h1 className="text-[24px] sm:text-[30px] font-semibold text-gray-900 tracking-tight capitalize">
+                {currentView.replace('-', ' ')}
+              </h1>
+            </header>
+            {dataLoading ? (
+              <Loader2 className="animate-spin text-gray-400" aria-label="Loading" />
+            ) : (
+              renderContent()
+            )}
+          </div>
         </div>
       </main>
     </div>

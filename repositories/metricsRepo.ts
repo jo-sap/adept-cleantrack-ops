@@ -209,6 +209,15 @@ export interface TimesheetEntryFlat {
   adhocJobName?: string;
 }
 
+function pad2(n: number): string {
+  return String(n).padStart(2, "0");
+}
+
+/** Format a Date as YYYY-MM-DD in local time (avoids timezone shifts from toISOString()). */
+function toLocalYmd(d: Date): string {
+  return `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}`;
+}
+
 /** Load timesheet entries from SharePoint for the given range; returns flat list for dashboard/views. */
 export async function getTimesheetEntriesForRange(
   accessToken: string,
@@ -255,12 +264,14 @@ export async function getTimesheetEntriesForRange(
   const workDateKey = workDateInternal;
   const hoursKey = hoursInternal;
   const result: TimesheetEntryFlat[] = [];
+  const startYmd = toLocalYmd(range.start);
+  const endYmdExclusive = toLocalYmd(range.end);
 
   for (const item of timesheetItems) {
     const f = (item.fields ?? {}) as Record<string, unknown>;
     const rawWorkDate = f[workDateKey] ?? f["WorkDate"];
     const workDate = toDate(rawWorkDate);
-    if (!workDate || !dateInRange(workDate, range)) continue;
+    if (!workDate) continue;
     const hours = toNum(f[hoursKey] ?? f["Hours"]);
     const { id: siteIdRaw, name: siteNameRaw } = getLookupIdOrName(f, "Site");
     const { id: cleanerIdRaw, name: cleanerNameRaw } = getLookupIdOrName(f, "Cleaner");
@@ -269,12 +280,15 @@ export async function getTimesheetEntriesForRange(
     const siteIdVal = sharepoint.normalizeListItemId(siteIdRaw);
     const cleanerIdVal = sharepoint.normalizeListItemId(cleanerIdRaw);
     const rate = cleanerRateMap[cleanerIdVal] ?? 0;
-    // Use the raw SharePoint date string (first 10 chars) to avoid timezone shifts,
-    // falling back to the ISO date only if needed.
+    // Normalize Work Date to YYYY-MM-DD.
+    // IMPORTANT: avoid Date.toISOString() here because it can shift the day (timezone).
+    // Graph may return ISO strings ("2026-03-09T00:00:00Z") or locale-ish strings ("3/9/2026").
     const dateStr =
-      typeof rawWorkDate === "string" && rawWorkDate.length >= 10
+      typeof rawWorkDate === "string" && /^\d{4}-\d{2}-\d{2}/.test(rawWorkDate)
         ? rawWorkDate.slice(0, 10)
-        : workDate.toISOString().slice(0, 10);
+        : toLocalYmd(workDate);
+    // Range check using YYYY-MM-DD string comparison (timezone-safe).
+    if (dateStr < startYmd || dateStr >= endYmdExclusive) continue;
     const adhocJobIdVal = f[adHocJobIdKey] != null ? String(f[adHocJobIdKey]).trim() : "";
     let adhocJobNameVal = "";
     const ahVal = f[adHocJobNameKey];
@@ -334,78 +348,152 @@ export async function saveTimesheetEntriesToSharePoint(
   }
   const workDateKey = map["Work Date"] ?? "WorkDate" ?? "Work_x0020_Date";
   const hoursKey = map["Hours"] ?? "Hours";
-  const siteKey = map["Site"] === "Site" ? "SiteLookupId" : (map["Site"] ?? "SiteLookupId");
-  const cleanerKey = map["Cleaner"] === "Cleaner" ? "CleanerLookupId" : (map["Cleaner"] ?? "CleanerLookupId");
+  const siteInternal = map["Site"] ?? "Site";
+  const cleanerInternal = map["Cleaner"] ?? "Cleaner";
+  const siteLookupIdKey = siteInternal === "Site" ? "SiteLookupId" : `${siteInternal}LookupId`;
+  const cleanerLookupIdKey = cleanerInternal === "Cleaner" ? "CleanerLookupId" : `${cleanerInternal}LookupId`;
   const adHocJobDisplay = "Ad Hoc Job";
   const adHocJobInternal = map[adHocJobDisplay] ?? "Ad_x0020_Hoc_x0020_Job";
   const adHocJobKey = adHocJobInternal === "Ad Hoc Job" ? "Ad_x0020_Hoc_x0020_JobLookupId" : `${adHocJobInternal}LookupId`;
 
-  const existing = await getTimesheetEntriesForRange(accessToken, range);
-  const keyToId = new Map<string, string>();
-  for (const e of existing) {
-    keyToId.set(`${e.siteId}|${e.cleanerId}|${e.date}`, e.id);
+  // IMPORTANT: We use "replace" semantics to avoid duplicate creation when Graph read-after-write is laggy
+  // or when date parsing causes mismatched keys. For each (site, cleaner, adhoc) in this save:
+  // 1) delete all existing entries in this range for that composite
+  // 2) create fresh entries for dates with hours > 0
+  const startYmd = toLocalYmd(range.start);
+  const endYmdExclusive = toLocalYmd(range.end);
+
+  const byComposite = new Map<string, TimesheetEntryPayload[]>();
+  for (const e of entries) {
+    const sId = sharepoint.normalizeListItemId(e.siteId);
+    const cId = sharepoint.normalizeListItemId(e.cleanerId);
+    const aId = e.adhocJobId != null ? sharepoint.normalizeListItemId(e.adhocJobId) : "";
+    const composite = `${sId}|${cId}|${aId}`;
+    if (!byComposite.has(composite)) byComposite.set(composite, []);
+    byComposite.get(composite)!.push({ ...e, siteId: sId, cleanerId: cId, adhocJobId: aId || null });
   }
+
+  // Fetch current list items once, then filter client-side (avoids Graph 400 on unindexed lookup filters).
+  const fieldsSelect = Array.from(
+    new Set(
+      [
+        workDateKey,
+        siteLookupIdKey,
+        cleanerLookupIdKey,
+        hoursKey,
+        ...(adHocJobKey ? [adHocJobKey] : []),
+      ].filter(Boolean)
+    )
+  );
+  const existingItems = await sharepoint.getListItems(accessToken, siteId, listId, fieldsSelect);
 
   let saved = 0;
   const errors: string[] = [];
-  for (const entry of entries) {
-    const key = `${entry.siteId}|${entry.cleanerId}|${entry.date}`;
-    const existingId = keyToId.get(key);
-    const siteLookupVal = /^\d+$/.test(entry.siteId) ? parseInt(entry.siteId, 10) : entry.siteId;
-    const cleanerLookupVal = /^\d+$/.test(entry.cleanerId) ? parseInt(entry.cleanerId, 10) : entry.cleanerId;
-    const workDate = entry.date; // yyyy-MM-dd
+  for (const [composite, group] of byComposite.entries()) {
+    const [sId, cId, aId] = composite.split("|");
+    if (!sId || !cId) continue;
+    const siteLookupVal = /^\d+$/.test(sId) ? parseInt(sId, 10) : sId;
+    const cleanerLookupVal = /^\d+$/.test(cId) ? parseInt(cId, 10) : cId;
     const adHocLookupVal =
-      entry.adhocJobId != null && entry.adhocJobId !== ""
-        ? (/^\d+$/.test(entry.adhocJobId) ? parseInt(entry.adhocJobId, 10) : entry.adhocJobId)
+      aId && aId.trim()
+        ? (/^\d+$/.test(aId) ? parseInt(aId, 10) : aId)
         : null;
 
-    try {
-      if (existingId) {
-        const updateFields: Record<string, unknown> = { [hoursKey]: entry.hours };
-        if (adHocJobKey) updateFields[adHocJobKey] = adHocLookupVal;
-        if (typeof console !== "undefined") {
-          console.log("[Timesheets Save] PATCH entry", {
-            id: existingId,
-            workDate,
-            hours: entry.hours,
-            siteId: entry.siteId,
-            cleanerId: entry.cleanerId,
-          });
+    // 1) Delete existing items for this composite in this range (client-side filtered),
+    //    sending deletes in Graph $batch chunks (20 per request).
+    const toDeleteIds: string[] = [];
+    for (const item of existingItems) {
+      const f = (item.fields ?? {}) as Record<string, unknown>;
+      const siteVal = Number(f[siteLookupIdKey]);
+      const cleanerVal = Number(f[cleanerLookupIdKey]);
+      if (!Number.isFinite(siteVal) || !Number.isFinite(cleanerVal)) continue;
+      if (siteVal !== Number(siteLookupVal) || cleanerVal !== Number(cleanerLookupVal)) continue;
+
+      if (adHocJobKey) {
+        const ahRaw = f[adHocJobKey];
+        const ahVal = ahRaw == null || ahRaw === "" ? null : Number(ahRaw);
+        const want = adHocLookupVal == null ? null : Number(adHocLookupVal);
+        if (want == null) {
+          if (ahVal != null && Number.isFinite(ahVal)) continue;
+        } else {
+          if (!(Number.isFinite(ahVal) && ahVal === want)) continue;
         }
-        await sharepoint.updateListItem(accessToken, siteId, listId, existingId, updateFields);
-      } else {
-        const createFields: Record<string, unknown> = {
-          [workDateKey]: workDate,
-          [hoursKey]: entry.hours,
-          [siteKey]: siteLookupVal,
-          [cleanerKey]: cleanerLookupVal,
-        };
-        if (adHocJobKey && adHocLookupVal != null) createFields[adHocJobKey] = adHocLookupVal;
-        if (typeof console !== "undefined") {
-          console.log("[Timesheets Save] POST entry", {
-            workDate,
-            hours: entry.hours,
-            siteId: entry.siteId,
-            cleanerId: entry.cleanerId,
-          });
-        }
-        await sharepoint.createListItem(accessToken, siteId, listId, createFields);
       }
-      saved++;
+
+      const rawWorkDate = f[workDateKey];
+      const d = toDate(rawWorkDate);
+      if (!d) continue;
+      const ymd =
+        typeof rawWorkDate === "string" && /^\d{4}-\d{2}-\d{2}/.test(rawWorkDate)
+          ? rawWorkDate.slice(0, 10)
+          : toLocalYmd(d);
+      if (ymd < startYmd || ymd >= endYmdExclusive) continue;
+
+      if (item.id) toDeleteIds.push(item.id);
+    }
+
+    try {
+      let batchIdx = 0;
+      for (let i = 0; i < toDeleteIds.length; i += 20) {
+        const chunk = toDeleteIds.slice(i, i + 20);
+        const reqs = chunk.map((id, j) => ({
+          id: `del-${batchIdx}-${j}`,
+          method: "DELETE" as const,
+          url: `/sites/${siteId}/lists/${listId}/items/${id}`,
+        }));
+        const res = await sharepoint.graphBatch(accessToken, reqs);
+        for (const r of res) {
+          if (r.status >= 400) {
+            errors.push(`[Timesheets Save] Delete failed composite=${composite} status=${r.status}`);
+          }
+        }
+        batchIdx++;
+      }
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
-      const ctx = `date=${workDate}, siteId=${entry.siteId}, cleanerId=${entry.cleanerId}`;
-      const full = `[Timesheets Save] Failed for ${ctx}: ${msg}`;
-      if (typeof console !== "undefined") {
-        console.error(full);
+      errors.push(`[Timesheets Save] Failed to delete existing rows for composite=${composite}: ${msg}`);
+    }
+
+    // 2) Create fresh items for hours > 0 using Graph $batch (20 per request).
+    const toCreate = group.filter((e) => e.hours > 0);
+    try {
+      let batchIdx = 0;
+      for (let i = 0; i < toCreate.length; i += 20) {
+        const chunk = toCreate.slice(i, i + 20);
+        const reqs = chunk.map((entry, j) => {
+          const workDate = entry.date; // yyyy-MM-dd
+          const createFields: Record<string, unknown> = {
+            [workDateKey]: workDate,
+            [hoursKey]: entry.hours,
+            [siteLookupIdKey]: siteLookupVal,
+            [cleanerLookupIdKey]: cleanerLookupVal,
+          };
+          if (adHocJobKey && adHocLookupVal != null) createFields[adHocJobKey] = adHocLookupVal;
+          return {
+            id: `post-${batchIdx}-${j}`,
+            method: "POST" as const,
+            url: `/sites/${siteId}/lists/${listId}/items`,
+            headers: { "Content-Type": "application/json" },
+            body: { fields: createFields },
+          };
+        });
+        const res = await sharepoint.graphBatch(accessToken, reqs);
+        for (const r of res) {
+          if (r.status >= 400) {
+            errors.push(`[Timesheets Save] Create failed composite=${composite} status=${r.status}`);
+          } else {
+            saved++;
+          }
+        }
+        batchIdx++;
       }
-      errors.push(full);
-      // continue with other entries so partial saves still go through
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      errors.push(`[Timesheets Save] Failed to create rows for composite=${composite}: ${msg}`);
     }
   }
-  if (errors.length > 0) {
-    return { saved, error: errors.join(" | ") };
-  }
+
+  if (errors.length > 0) return { saved, error: errors.join(" | ") };
   return { saved };
 }
 

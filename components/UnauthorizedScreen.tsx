@@ -14,7 +14,7 @@ const UnauthorizedScreen: React.FC<UnauthorizedScreenProps> = ({ onSignOut }) =>
         </div>
         <h1 className="text-xl font-bold text-gray-900">Access denied</h1>
         <p className="text-gray-600 text-sm mt-2">
-          Your account is not authorised to access CleanTrack Ops. Please contact your administrator.
+          Your account is not authorised to access Adept Timesheet Ops. Please contact your administrator.
         </p>
         <button
           type="button"

@@ -1,13 +1,11 @@
 
-import React, { createContext, useContext, useState, useEffect, FC, ReactNode } from 'react';
-import { Role, Profile } from '../types';
-import { supabase } from '../lib/supabase';
-import { Session } from '@supabase/supabase-js';
+import React, { createContext, useContext, FC, ReactNode, useMemo } from "react";
+import type { Role, Profile } from "../types";
+import { useAppAuth } from "./AppAuthContext";
 
 interface AuthContextType {
   role: Role | null;
   profile: Profile | null;
-  session: Session | null;
   isAdmin: boolean;
   isManager: boolean;
   loading: boolean;
@@ -18,67 +16,40 @@ interface AuthContextType {
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
 
 export const RoleProvider: FC<{ children: ReactNode }> = ({ children }) => {
-  const [session, setSession] = useState<Session | null>(null);
-  const [profile, setProfile] = useState<Profile | null>(null);
-  const [loading, setLoading] = useState(true);
+  const { authStatus, user, signOut } = useAppAuth();
+  const loading = authStatus === "loading" || authStatus === "authorizing";
 
-  useEffect(() => {
-    supabase.auth.getSession().then(({ data: { session } }) => {
-      setSession(session);
-      if (session) fetchProfile(session.user.id);
-      else setLoading(false);
-    });
+  const role: Role | null = useMemo(() => {
+    const r = String(user?.role ?? "").trim().toLowerCase();
+    if (r === "admin") return "admin";
+    if (r === "manager") return "manager";
+    return null;
+  }, [user?.role]);
 
-    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
-      setSession(session);
-      if (session) fetchProfile(session.user.id);
-      else {
-        setProfile(null);
-        setLoading(false);
-      }
-    });
-
-    return () => subscription.unsubscribe();
-  }, []);
-
-  const fetchProfile = async (uid: string) => {
-    const { data, error } = await supabase
-      .from('profiles')
-      .select('*')
-      .eq('id', uid)
-      .single();
-
-    if (error && error.code === 'PGRST116') {
-      const { data: user } = await supabase.auth.getUser();
-      const newProfile = {
-        id: uid,
-        full_name: user.user?.user_metadata.full_name || 'New User',
-        role: 'manager' as Role
-      };
-      await supabase.from('profiles').insert(newProfile);
-      setProfile(newProfile);
-    } else {
-      setProfile(data);
-    }
-    setLoading(false);
-  };
+  const profile: Profile | null = useMemo(() => {
+    if (!user) return null;
+    if (!role) return null;
+    return {
+      id: user.id,
+      full_name: user.name,
+      role,
+    };
+  }, [user, role]);
 
   const logout = async () => {
-    await supabase.auth.signOut();
+    await signOut();
   };
 
-  const setRole = (role: Role) => {
-    if (profile) setProfile({ ...profile, role });
-  };
+  // Role is sourced from CleanTrack Users (SharePoint). Mutating it locally is not supported.
+  const setRole = () => {};
 
-  const isAdmin = profile?.role === 'admin';
-  const isManager = profile?.role === 'manager';
+  const isAdmin = role === "admin";
+  const isManager = role === "manager";
 
   return (
     <AuthContext.Provider value={{ 
-      role: profile?.role || null, 
+      role, 
       profile, 
-      session, 
       isAdmin, 
       isManager, 
       loading,

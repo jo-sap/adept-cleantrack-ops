@@ -52,6 +52,47 @@ async function graphFetch<T>(
   return data as T;
 }
 
+export interface GraphBatchRequest {
+  /** Unique id within the batch. */
+  id: string;
+  method: "GET" | "POST" | "PATCH" | "DELETE";
+  /** Relative URL, e.g. `/sites/{siteId}/lists/{listId}/items` */
+  url: string;
+  headers?: Record<string, string>;
+  body?: unknown;
+}
+
+interface GraphBatchResponseItem {
+  id: string;
+  status: number;
+  headers?: Record<string, string>;
+  body?: unknown;
+}
+
+interface GraphBatchResponse {
+  responses: GraphBatchResponseItem[];
+}
+
+/**
+ * Execute Microsoft Graph $batch requests.
+ * - Max 20 requests per batch (Graph limit).
+ * - URLs must be relative to graph.microsoft.com/v1.0
+ */
+export async function graphBatch(
+  accessToken: string,
+  requests: GraphBatchRequest[]
+): Promise<GraphBatchResponseItem[]> {
+  if (requests.length === 0) return [];
+  assertGraphAccessToken(accessToken);
+  if (requests.length > 20) {
+    throw new Error(`graphBatch supports up to 20 requests per batch; got ${requests.length}`);
+  }
+  const url = `${GRAPH_BASE}/$batch`;
+  const body = JSON.stringify({ requests });
+  const res = await graphFetch<GraphBatchResponse>(accessToken, url, { method: "POST", body });
+  return res.responses ?? [];
+}
+
 export interface GraphSiteResponse {
   id: string;
   displayName?: string;
@@ -157,6 +198,8 @@ export interface GraphColumnDefinition {
   displayName: string;
   lookup?: unknown;
   personOrGroup?: unknown;
+  /** Present for plain text / multiline columns (not lookup). */
+  text?: unknown;
 }
 
 interface GraphColumnDefinitionsResponse {
@@ -177,6 +220,7 @@ export async function getListColumnDefinitions(
     displayName: c.displayName ?? "",
     lookup: c.lookup,
     personOrGroup: c.personOrGroup,
+    text: (c as { text?: unknown }).text,
   }));
 }
 
@@ -236,7 +280,11 @@ export function normalizeListItemId(id: string): string {
 
 export interface GraphListItemsResponse {
   value?: GraphListItem[];
+  /** Present when more pages of list items exist (default page size is limited). */
+  "@odata.nextLink"?: string;
 }
+
+const LIST_ITEMS_MAX_PAGES = 200;
 
 /** Get list items with fields expanded. Optionally request specific fields (e.g. for lookup columns). */
 export async function getListItems(
@@ -245,17 +293,46 @@ export async function getListItems(
   listId: string,
   fieldsSelect?: string[]
 ): Promise<GraphListItem[]> {
-  let url = `${GRAPH_BASE}/sites/${siteId}/lists/${listId}/items?expand=fields`;
+  let url: string | null = `${GRAPH_BASE}/sites/${siteId}/lists/${listId}/items?expand=fields`;
   if (fieldsSelect && fieldsSelect.length > 0) {
     const select = fieldsSelect.join(",");
     url += `($select=${select})`;
   }
-  const data = await graphFetch<GraphListItemsResponse>(accessToken, url);
-  const value = data.value ?? [];
-  return value.map((item) => ({
-    id: item.id,
-    fields: item.fields ?? {},
-  }));
+
+  const out: GraphListItem[] = [];
+  const seenUrls = new Set<string>();
+  let page = 0;
+
+  while (url && page < LIST_ITEMS_MAX_PAGES) {
+    if (seenUrls.has(url)) {
+      if (IS_DEV) console.warn("[SP] getListItems: repeated URL, stopping pagination");
+      break;
+    }
+    seenUrls.add(url);
+
+    let data: GraphListItemsResponse;
+    try {
+      data = await graphFetch<GraphListItemsResponse>(accessToken, url);
+    } catch (e) {
+      if (page === 0) throw e;
+      console.error("[SP] getListItems: pagination page failed; returning items loaded so far", e);
+      break;
+    }
+
+    const value = data.value ?? [];
+    for (const item of value) {
+      out.push({
+        id: item.id,
+        fields: item.fields ?? {},
+      });
+    }
+
+    const next = data["@odata.nextLink"]?.trim();
+    url = next && !seenUrls.has(next) ? next : null;
+    page += 1;
+  }
+
+  return out;
 }
 
 /**

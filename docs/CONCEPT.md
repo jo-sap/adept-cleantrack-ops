@@ -42,6 +42,7 @@ Adept CleanTrack Ops is an internal operations platform that:
 | **CleanTrack Sites** | Master sites: Site Name, Address, State, Active, Monthly Revenue. |
 | **CleanTrack Cleaners** | Cleaner directory: Cleaner Name, Pay Rate, Account Name, BSB, Account Number, Active. |
 | **CleanTrack Timesheet Entries** | Actual hours: Entry Name, Site (lookup), Cleaner (lookup), Work Date, Hours, Fortnight Start, Notes. |
+| **CleanTrack Timesheet Period Notes** | Manager note per site + fortnight: **Site** = lookup column → **CleanTrack Sites** (not plain text), **Period Start** (date), **Note** (multi-line). Optional: Title, Tags, Cleaner. |
 | **CleanTrack Site Budgets** | Planned hours per site: Budget Name, Site, Mon–Sun Hours, Active. |
 | **CleanTrack Site Managers** | Assignments: Assignment Name, Site (lookup), Manager (email/lookup), Active, Is Primary. |
 
@@ -77,8 +78,8 @@ Adept CleanTrack Ops is an internal operations platform that:
 
 ### Timesheets
 
-- **Current**: Supabase-backed timesheet batches/entries (optional legacy).
-- **Target**: Load **CleanTrack Timesheet Entries** from SharePoint, filter by site/cleaner/fortnight; create entries via Graph when needed (to be fully wired).
+- Load **CleanTrack Timesheet Entries** from SharePoint by fortnight; save via Graph (`saveTimesheetEntriesToSharePoint`).
+- **Period notes** (managers/admins): **CleanTrack Timesheet Period Notes** — one note per site per fortnight on the timesheet screen (`timesheetNotesRepo`).
 
 ### Budget vs Actual (Planned vs Timesheet)
 

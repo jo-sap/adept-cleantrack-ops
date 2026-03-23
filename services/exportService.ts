@@ -1,13 +1,42 @@
-
-import * as XLSX from 'xlsx';
+import * as XLSX from 'xlsx-js-style';
 import { format, addDays } from 'date-fns';
 import { Site, Cleaner, TimeEntry, FortnightPeriod, AdHocJob } from '../types';
+import * as sharepoint from '../lib/sharepoint';
+import { normalizeSiteLabelForNotes } from '../lib/siteNotesLabel';
+import type { SiteNotesExportLookup } from '../repositories/timesheetNotesRepo';
+
+function managerNoteForSite(site: Site, lookup?: SiteNotesExportLookup): string {
+  if (!lookup) return '';
+  const sid = sharepoint.normalizeListItemId(site.id);
+  const byId = lookup.bySiteId[sid]?.trim();
+  if (byId) return byId;
+  const nm = normalizeSiteLabelForNotes(site.name);
+  return (nm ? lookup.bySiteNameLower[nm] : '')?.trim() ?? '';
+}
+
+/** Light yellow fill for cells with a manager note (Excel RGB without #). */
+const NOTE_FILL_RGB = 'FFFFEB9C';
+
+function applyNoteColumnHighlight(
+  worksheet: XLSX.WorkSheet,
+  noteColumnIndex: number,
+  totalRows: number
+): void {
+  for (let r = 1; r < totalRows; r++) {
+    const addr = XLSX.utils.encode_cell({ r, c: noteColumnIndex });
+    const cell = worksheet[addr] as { v?: unknown; w?: string; s?: unknown } | undefined;
+    if (!cell) continue;
+    const raw = cell.v ?? cell.w ?? '';
+    if (String(raw).trim() === '') continue;
+    cell.s = {
+      fill: { fgColor: { rgb: NOTE_FILL_RGB } },
+      alignment: { wrapText: true, vertical: 'top' },
+    };
+  }
+}
 
 /** Export current Ad Hoc jobs to XLSX. Uses the same job list as the UI (respects month/status/manager/site filters). */
-export const exportAdHocJobsToSpreadsheet = (
-  jobs: AdHocJob[],
-  monthLabel: string
-) => {
+export const exportAdHocJobsToSpreadsheet = (jobs: AdHocJob[], monthLabel: string) => {
   const headers = [
     'Job Name',
     'Schedule Type',
@@ -104,12 +133,16 @@ export const exportAdHocJobsToSpreadsheet = (
   XLSX.writeFile(workbook, `${fileName}.xlsx`);
 };
 
+/**
+ * @param siteNotesLookup Optional maps from CleanTrack Timesheet Period Notes (by site id and by site name).
+ */
 export const exportFortnightTimesheets = (
   period: FortnightPeriod,
   sites: Site[],
   cleaners: Cleaner[],
   entries: TimeEntry[],
-  formatType: 'xlsx' | 'csv' = 'xlsx'
+  formatType: 'xlsx' | 'csv' = 'xlsx',
+  siteNotesLookup?: SiteNotesExportLookup
 ) => {
   const dates: Date[] = [];
   for (let i = 0; i < 14; i++) {
@@ -123,25 +156,31 @@ export const exportFortnightTimesheets = (
     'Cleaner Name',
     ...dateHeaders,
     'Total Hours',
+    'Hourly rate',
     'Total Payment',
     'Account Name',
     'BSB',
-    'Account Number'
+    'Account Number',
+    'Manager note',
   ];
 
   const rows: any[][] = [];
+  const periodStartStr = format(period.startDate, 'yyyy-MM-dd');
+  const periodEndStr = format(period.endDate, 'yyyy-MM-dd');
 
-  // Iterate through all sites and assigned cleaners
   sites.forEach(site => {
-    // Correctly reference snake_case property
     site.assigned_cleaner_ids.forEach(cleanerId => {
       const cleaner = cleaners.find(c => c.id === cleanerId);
       if (!cleaner) return;
 
-      // siteId and cleanerId are augmented onto TimeEntry in App.tsx and types.ts
-      const cleanerEntries = entries.filter(e => e.siteId === site.id && e.cleanerId === cleanerId);
-      
-      // Skip if no work logged in this fortnight at this site
+      const cleanerEntries = entries.filter(
+        (e) =>
+          e.siteId === site.id &&
+          e.cleanerId === cleanerId &&
+          e.date >= periodStartStr &&
+          e.date <= periodEndStr
+      );
+
       if (cleanerEntries.length === 0) return;
 
       const row: any[] = [
@@ -153,28 +192,31 @@ export const exportFortnightTimesheets = (
       let totalHours = 0;
       let totalPayment = 0;
 
-      // Add daily hours
       dates.forEach(date => {
         const dateStr = format(date, 'yyyy-MM-dd');
         const dayEntries = cleanerEntries.filter(e => e.date === dateStr);
         const dayHours = dayEntries.reduce((sum, e) => sum + e.hours, 0);
-        
+
         row.push(dayHours > 0 ? dayHours : '');
         totalHours += dayHours;
 
-        // Calculate payment for this specific day using snapshot or fallback
         dayEntries.forEach(e => {
-          // Use correct snake_case properties
           const rate = e.pay_rate_snapshot || site.cleaner_rates[cleanerId] || cleaner.payRatePerHour || 0;
           totalPayment += e.hours * rate;
         });
       });
 
       row.push(totalHours);
+      row.push(
+        totalHours > 0 ? `$${(totalPayment / totalHours).toFixed(2)}` : ''
+      );
       row.push(`$${totalPayment.toFixed(2)}`);
       row.push(cleaner.bankAccountName || '');
       row.push(cleaner.bankBsb || '');
       row.push(cleaner.bankAccountNumber || '');
+
+      const note = managerNoteForSite(site, siteNotesLookup);
+      row.push(note);
 
       rows.push(row);
     });
@@ -185,7 +227,17 @@ export const exportFortnightTimesheets = (
     return;
   }
 
-  const worksheet = XLSX.utils.aoa_to_sheet([headers, ...rows]);
+  const aoa = [headers, ...rows];
+  const worksheet = XLSX.utils.aoa_to_sheet(aoa);
+  const noteColIdx = headers.length - 1;
+
+  if (formatType === 'xlsx') {
+    applyNoteColumnHighlight(worksheet, noteColIdx, aoa.length);
+    const cols = worksheet['!cols'] ?? [];
+    cols[noteColIdx] = { wch: 48 };
+    worksheet['!cols'] = cols;
+  }
+
   const workbook = XLSX.utils.book_new();
   XLSX.utils.book_append_sheet(workbook, worksheet, "Timesheets");
 

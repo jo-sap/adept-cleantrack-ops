@@ -14,7 +14,9 @@ import {
   deleteSite,
   type Site,
   type SitePayload,
+  type SiteNoServicePeriod,
 } from "../repositories/sitesRepo";
+import { getSchoolHolidayPeriods, getSupportedSchoolHolidayYears } from "../lib/schoolHolidays";
 import { getAssignedSiteIdsForManager, createSiteManagerAssignment, getAssignedManagersForSite, deleteSiteManagerAssignment, fetchSiteManagerAssignments, joinAssignmentsToSites } from "../repositories/siteManagersRepo";
 import { getCleanTrackManagers } from "../repositories/usersRepo";
 import { createSiteBudget, getSiteBudgets, updateSiteBudget, type SiteBudgetHours } from "../repositories/budgetsRepo";
@@ -29,7 +31,33 @@ const DAY_KEYS: DayKey[] = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
 
 type VisitFreq = "Weekly" | "Fortnightly" | "Monthly";
 
-const DEFAULT_DAY_HOURS: Record<DayKey, number> = { Sun: 0, Mon: 0, Tue: 0, Wed: 0, Thu: 0, Fri: 0, Sat: 0 };
+/** Empty = not set in UI / SharePoint; saved `0` stays numeric `0`. */
+type DayHourField = number | "";
+const EMPTY_DAY_HOURS: Record<DayKey, DayHourField> = { Sun: "", Mon: "", Tue: "", Wed: "", Thu: "", Fri: "", Sat: "" };
+
+function dayHourToNum(v: DayHourField): number {
+  return v === "" ? 0 : v;
+}
+
+function sumDayHours(rec: Record<DayKey, DayHourField>): number {
+  return DAY_KEYS.reduce((s, d) => s + dayHourToNum(rec[d]), 0);
+}
+
+function budgetHourToField(n: number | undefined): DayHourField {
+  return n !== undefined ? n : "";
+}
+
+function budgetHasAnyWeek2(b: SiteBudgetHours): boolean {
+  return (
+    b.week2Sunday !== undefined ||
+    b.week2Monday !== undefined ||
+    b.week2Tuesday !== undefined ||
+    b.week2Wednesday !== undefined ||
+    b.week2Thursday !== undefined ||
+    b.week2Friday !== undefined ||
+    b.week2Saturday !== undefined
+  );
+}
 
 interface BulkSiteRow {
   id: string;
@@ -42,9 +70,35 @@ interface BulkSiteRow {
   state: string;
   active: boolean;
   visitFrequency: VisitFreq;
-  dailyHours: Record<DayKey, number>;
-  dailyHoursWeek2: Record<DayKey, number>;
+  dailyHours: Record<DayKey, DayHourField>;
+  dailyHoursWeek2: Record<DayKey, DayHourField>;
   hoursPerVisit: number | "";
+}
+
+type NoServiceMode = "manual" | "school_auto";
+
+interface NoServicePeriodRow {
+  id: string;
+  label: string;
+  startDate: string;
+  endDate: string;
+  reason: string;
+  source?: "manual" | "school_holidays_auto";
+  state?: string;
+  year?: number;
+}
+
+function inferNoServiceModeFromSite(site: Site): NoServiceMode {
+  const list = site.noServicePeriods;
+  if (!list?.length) return "manual";
+  return list.some((p) => p.source === "school_holidays_auto") ? "school_auto" : "manual";
+}
+
+function inferNoServiceYearFromSite(site: Site): number {
+  const y = site.noServicePeriods?.find(
+    (p) => p.source === "school_holidays_auto" && typeof p.year === "number"
+  )?.year;
+  return y ?? new Date().getFullYear();
 }
 
 const WRITE_PERMISSION_HINT =
@@ -86,12 +140,8 @@ const SiteManager: React.FC<SiteManagerProps> = ({ onUpdateSite, onViewSite, ref
   const [submitLoading, setSubmitLoading] = useState(false);
   const [submitError, setSubmitError] = useState<string | null>(null);
   const [managers, setManagers] = useState<{ id: string; fullName: string; email: string }[]>([]);
-  const [dailyHours, setDailyHours] = useState<Record<DayKey, number>>({
-    Sun: 0, Mon: 0, Tue: 0, Wed: 0, Thu: 0, Fri: 0, Sat: 0,
-  });
-  const [dailyHoursWeek2, setDailyHoursWeek2] = useState<Record<DayKey, number>>({
-    Sun: 0, Mon: 0, Tue: 0, Wed: 0, Thu: 0, Fri: 0, Sat: 0,
-  });
+  const [dailyHours, setDailyHours] = useState<Record<DayKey, DayHourField>>({ ...EMPTY_DAY_HOURS });
+  const [dailyHoursWeek2, setDailyHoursWeek2] = useState<Record<DayKey, DayHourField>>({ ...EMPTY_DAY_HOURS });
   const [fortnightCostBudget, setFortnightCostBudget] = useState<number | "">("");
   const [selectedManagerIds, setSelectedManagerIds] = useState<string[]>([]);
   const [visitFrequency, setVisitFrequency] = useState<VisitFreq>("Weekly");
@@ -100,6 +150,10 @@ const SiteManager: React.FC<SiteManagerProps> = ({ onUpdateSite, onViewSite, ref
   const [saturdayLabourRate, setSaturdayLabourRate] = useState<number | "">("");
   const [sundayLabourRate, setSundayLabourRate] = useState<number | "">("");
   const [phLabourRate, setPhLabourRate] = useState<number | "">("");
+  const [noServicePeriods, setNoServicePeriods] = useState<NoServicePeriodRow[]>([]);
+  const [noServiceMode, setNoServiceMode] = useState<NoServiceMode>("manual");
+  const [noServiceYear, setNoServiceYear] = useState<number>(() => new Date().getFullYear());
+  const [noServiceHolidayMessage, setNoServiceHolidayMessage] = useState<string | null>(null);
 
   const [bulkModalOpen, setBulkModalOpen] = useState(false);
   const [bulkRows, setBulkRows] = useState<BulkSiteRow[]>([]);
@@ -114,6 +168,17 @@ const SiteManager: React.FC<SiteManagerProps> = ({ onUpdateSite, onViewSite, ref
   const [selectedSiteIds, setSelectedSiteIds] = useState<string[]>([]);
   const [bulkDeleteLoading, setBulkDeleteLoading] = useState(false);
   const editingSiteIdRef = useRef<string | null>(null);
+
+  const createNoServiceRow = useCallback(
+    (): NoServicePeriodRow => ({
+      id: `nsp-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+      label: "",
+      startDate: "",
+      endDate: "",
+      reason: "",
+    }),
+    []
+  );
 
   const showToast = useCallback((msg: string) => {
     setToast(msg);
@@ -240,6 +305,119 @@ const SiteManager: React.FC<SiteManagerProps> = ({ onUpdateSite, onViewSite, ref
     }
   };
 
+  const validateManualNoServiceRows = (
+    rows: NoServicePeriodRow[]
+  ): { periods: SiteNoServicePeriod[]; error?: string } => {
+    const periods: SiteNoServicePeriod[] = [];
+    for (const row of rows) {
+      const label = row.label.trim();
+      const start = row.startDate.trim();
+      const end = row.endDate.trim();
+      const reason = row.reason.trim();
+      const isEmpty = !label && !start && !end && !reason;
+      if (isEmpty) continue;
+      if (!start || !end) {
+        return { periods: [], error: "No Service Period rows require both Start Date and End Date." };
+      }
+      if (end < start) {
+        return { periods: [], error: "No Service Period End Date must be on or after Start Date." };
+      }
+      periods.push({
+        ...(label ? { label } : {}),
+        start_date: start,
+        end_date: end,
+        ...(reason ? { reason } : {}),
+        source: "manual",
+      });
+    }
+    return { periods };
+  };
+
+  const validateAutoNoServiceRows = (
+    rows: NoServicePeriodRow[],
+    siteState: string,
+    year: number
+  ): { periods: SiteNoServicePeriod[]; error?: string } => {
+    const st = siteState.trim();
+    if (!st) {
+      return {
+        periods: [],
+        error: "Select State on this site before saving School Holidays (Auto).",
+      };
+    }
+    if (rows.length === 0) {
+      return {
+        periods: [],
+        error: "Populate school holidays before saving, or switch to Manual mode.",
+      };
+    }
+    const periods: SiteNoServicePeriod[] = [];
+    const upper = st.toUpperCase();
+    for (const row of rows) {
+      const start = row.startDate.trim();
+      const end = row.endDate.trim();
+      if (!start || !end) {
+        return {
+          periods: [],
+          error: "Each period needs Start and End dates. Click Populate School Holidays again.",
+        };
+      }
+      if (end < start) {
+        return { periods: [], error: "No Service Period End Date must be on or after Start Date." };
+      }
+      periods.push({
+        ...(row.label.trim() ? { label: row.label.trim() } : {}),
+        start_date: start,
+        end_date: end,
+        reason: row.reason.trim() || "School holidays",
+        source: "school_holidays_auto",
+        state: upper,
+        year,
+      });
+    }
+    return { periods };
+  };
+
+  const handlePopulateSchoolHolidays = () => {
+    setNoServiceHolidayMessage(null);
+    const st = form.state.trim();
+    if (!st) {
+      setNoServiceHolidayMessage("Select State (above) before populating school holidays.");
+      return;
+    }
+    const res = getSchoolHolidayPeriods(st, noServiceYear);
+    if (!res.ok) {
+      setNoServiceHolidayMessage(res.error);
+      return;
+    }
+    if (res.periods.length === 0) {
+      setNoServiceHolidayMessage("No school holiday periods were returned for that state and year.");
+      return;
+    }
+    setNoServicePeriods(
+      res.periods.map((p, i) => ({
+        id: `nsp-auto-${Date.now()}-${i}`,
+        label: p.label ?? "",
+        startDate: p.start_date,
+        endDate: p.end_date,
+        reason: p.reason ?? "School holidays",
+        source: "school_holidays_auto" as const,
+        state: p.state,
+        year: p.year,
+      }))
+    );
+    setNoServiceHolidayMessage(
+      `Loaded ${res.periods.length} period(s) for ${st.toUpperCase()} ${noServiceYear}. Click Save to store.`
+    );
+  };
+
+  const schoolHolidayYearOptions = useMemo(() => {
+    const cy = new Date().getFullYear();
+    const embedded = getSupportedSchoolHolidayYears();
+    const set = new Set<number>([...embedded, cy, cy + 1, cy + 2, cy - 1, noServiceYear]);
+    return [...set].sort((a, b) => a - b);
+  }, [noServiceYear]);
+
   const openAdd = () => {
     setModalMode("add");
     setEditingSite(null);
@@ -251,8 +429,8 @@ const SiteManager: React.FC<SiteManagerProps> = ({ onUpdateSite, onViewSite, ref
       active: true,
       monthlyRevenue: null,
     });
-    setDailyHours({ Sun: 0, Mon: 0, Tue: 0, Wed: 0, Thu: 0, Fri: 0, Sat: 0 });
-    setDailyHoursWeek2({ Sun: 0, Mon: 0, Tue: 0, Wed: 0, Thu: 0, Fri: 0, Sat: 0 });
+    setDailyHours({ ...EMPTY_DAY_HOURS });
+    setDailyHoursWeek2({ ...EMPTY_DAY_HOURS });
     setFortnightCostBudget("");
     setVisitFrequency("Weekly");
     setHoursPerVisit("");
@@ -260,7 +438,11 @@ const SiteManager: React.FC<SiteManagerProps> = ({ onUpdateSite, onViewSite, ref
     setSaturdayLabourRate("");
     setSundayLabourRate("");
     setPhLabourRate("");
-    setSelectedManagerEmails([]);
+    setNoServicePeriods([]);
+    setNoServiceMode("manual");
+    setNoServiceYear(new Date().getFullYear());
+    setNoServiceHolidayMessage(null);
+    setSelectedManagerIds([]);
     setSubmitError(null);
     getGraphAccessToken().then((token) => {
       if (token) getCleanTrackManagers(token).then(setManagers).catch(() => setManagers([]));
@@ -283,31 +465,31 @@ const SiteManager: React.FC<SiteManagerProps> = ({ onUpdateSite, onViewSite, ref
     setDailyHours(
       budget
         ? {
-            Sun: budget.sunday,
-            Mon: budget.monday,
-            Tue: budget.tuesday,
-            Wed: budget.wednesday,
-            Thu: budget.thursday,
-            Fri: budget.friday,
-            Sat: budget.saturday,
+            Sun: budgetHourToField(budget.sunday),
+            Mon: budgetHourToField(budget.monday),
+            Tue: budgetHourToField(budget.tuesday),
+            Wed: budgetHourToField(budget.wednesday),
+            Thu: budgetHourToField(budget.thursday),
+            Fri: budgetHourToField(budget.friday),
+            Sat: budgetHourToField(budget.saturday),
           }
-        : { Sun: 0, Mon: 0, Tue: 0, Wed: 0, Thu: 0, Fri: 0, Sat: 0 }
+        : { ...EMPTY_DAY_HOURS }
     );
     setDailyHoursWeek2(
-      budget && budget.week2Sunday != null
+      budget && budgetHasAnyWeek2(budget)
         ? {
-            Sun: budget.week2Sunday,
-            Mon: budget.week2Monday ?? 0,
-            Tue: budget.week2Tuesday ?? 0,
-            Wed: budget.week2Wednesday ?? 0,
-            Thu: budget.week2Thursday ?? 0,
-            Fri: budget.week2Friday ?? 0,
-            Sat: budget.week2Saturday ?? 0,
+            Sun: budgetHourToField(budget.week2Sunday),
+            Mon: budgetHourToField(budget.week2Monday),
+            Tue: budgetHourToField(budget.week2Tuesday),
+            Wed: budgetHourToField(budget.week2Wednesday),
+            Thu: budgetHourToField(budget.week2Thursday),
+            Fri: budgetHourToField(budget.week2Friday),
+            Sat: budgetHourToField(budget.week2Saturday),
           }
-        : { Sun: 0, Mon: 0, Tue: 0, Wed: 0, Thu: 0, Fri: 0, Sat: 0 }
+        : { ...EMPTY_DAY_HOURS }
     );
     setFortnightCostBudget(budget?.fortnightCostBudget != null ? budget.fortnightCostBudget : "");
-    setSelectedManagerEmails([]);
+    setSelectedManagerIds([]);
     const freq = budget?.visitFrequency;
     const normalizedFreq: VisitFreq =
       freq === "Fortnightly" || freq === "Monthly" ? freq : "Weekly";
@@ -316,7 +498,11 @@ const SiteManager: React.FC<SiteManagerProps> = ({ onUpdateSite, onViewSite, ref
       budget?.hoursPerVisit != null && budget.hoursPerVisit > 0 ? budget.hoursPerVisit : ""
     );
     setWeekdayLabourRate(
-      budget?.weekdayLabourRate != null && budget.weekdayLabourRate >= 0 ? budget.weekdayLabourRate : (budget?.budgetLabourRate != null && budget.budgetLabourRate > 0 ? budget.budgetLabourRate : "")
+      budget?.weekdayLabourRate != null && budget.weekdayLabourRate >= 0
+        ? budget.weekdayLabourRate
+        : budget?.budgetLabourRate != null && budget.budgetLabourRate >= 0
+          ? budget.budgetLabourRate
+          : ""
     );
     setSaturdayLabourRate(
       budget?.saturdayLabourRate != null && budget.saturdayLabourRate >= 0 ? budget.saturdayLabourRate : (budget?.weekendLabourRate != null && budget.weekendLabourRate >= 0 ? budget.weekendLabourRate : "")
@@ -326,6 +512,22 @@ const SiteManager: React.FC<SiteManagerProps> = ({ onUpdateSite, onViewSite, ref
     );
     setPhLabourRate(
       budget?.phLabourRate != null && budget.phLabourRate >= 0 ? budget.phLabourRate : ""
+    );
+    setNoServiceMode(inferNoServiceModeFromSite(site));
+    setNoServiceYear(inferNoServiceYearFromSite(site));
+    setNoServiceHolidayMessage(null);
+    setNoServicePeriods(
+      (site.noServicePeriods ?? []).map((p, idx) => ({
+        id: `nsp-${site.id}-${idx}`,
+        label: String(p.label ?? ""),
+        startDate: String(p.start_date ?? ""),
+        endDate: String(p.end_date ?? ""),
+        reason: String(p.reason ?? ""),
+        source:
+          p.source === "school_holidays_auto" || p.source === "manual" ? p.source : undefined,
+        state: p.state,
+        year: typeof p.year === "number" ? p.year : undefined,
+      }))
     );
     setSubmitError(null);
     getGraphAccessToken().then(async (token) => {
@@ -347,6 +549,7 @@ const SiteManager: React.FC<SiteManagerProps> = ({ onUpdateSite, onViewSite, ref
     setEditingSite(null);
     editingSiteIdRef.current = null;
     setSubmitError(null);
+    setNoServiceHolidayMessage(null);
   };
 
   /** Create a new empty bulk row. */
@@ -360,8 +563,8 @@ const SiteManager: React.FC<SiteManagerProps> = ({ onUpdateSite, onViewSite, ref
     state: "",
     active: true,
     visitFrequency: "Weekly",
-    dailyHours: { ...DEFAULT_DAY_HOURS },
-    dailyHoursWeek2: { ...DEFAULT_DAY_HOURS },
+    dailyHours: { ...EMPTY_DAY_HOURS },
+    dailyHoursWeek2: { ...EMPTY_DAY_HOURS },
     hoursPerVisit: "",
   }), []);
 
@@ -423,24 +626,24 @@ const SiteManager: React.FC<SiteManagerProps> = ({ onUpdateSite, onViewSite, ref
           await createSiteBudget(token, {
             budgetName: `${siteName} Budget`,
             siteListItemId: siteId,
-            sundayHours: isMonthly ? 0 : row.dailyHours.Sun,
-            mondayHours: isMonthly ? 0 : row.dailyHours.Mon,
-            tuesdayHours: isMonthly ? 0 : row.dailyHours.Tue,
-            wednesdayHours: isMonthly ? 0 : row.dailyHours.Wed,
-            thursdayHours: isMonthly ? 0 : row.dailyHours.Thu,
-            fridayHours: isMonthly ? 0 : row.dailyHours.Fri,
-            saturdayHours: isMonthly ? 0 : row.dailyHours.Sat,
+            sundayHours: isMonthly ? 0 : dayHourToNum(row.dailyHours.Sun),
+            mondayHours: isMonthly ? 0 : dayHourToNum(row.dailyHours.Mon),
+            tuesdayHours: isMonthly ? 0 : dayHourToNum(row.dailyHours.Tue),
+            wednesdayHours: isMonthly ? 0 : dayHourToNum(row.dailyHours.Wed),
+            thursdayHours: isMonthly ? 0 : dayHourToNum(row.dailyHours.Thu),
+            fridayHours: isMonthly ? 0 : dayHourToNum(row.dailyHours.Fri),
+            saturdayHours: isMonthly ? 0 : dayHourToNum(row.dailyHours.Sat),
             active: true,
             visitFrequency: row.visitFrequency,
             ...(isMonthly && row.hoursPerVisit !== "" && { hoursPerVisit: Number(row.hoursPerVisit) }),
             ...(isFortnightly && {
-              week2SundayHours: row.dailyHoursWeek2.Sun,
-              week2MondayHours: row.dailyHoursWeek2.Mon,
-              week2TuesdayHours: row.dailyHoursWeek2.Tue,
-              week2WednesdayHours: row.dailyHoursWeek2.Wed,
-              week2ThursdayHours: row.dailyHoursWeek2.Thu,
-              week2FridayHours: row.dailyHoursWeek2.Fri,
-              week2SaturdayHours: row.dailyHoursWeek2.Sat,
+              week2SundayHours: dayHourToNum(row.dailyHoursWeek2.Sun),
+              week2MondayHours: dayHourToNum(row.dailyHoursWeek2.Mon),
+              week2TuesdayHours: dayHourToNum(row.dailyHoursWeek2.Tue),
+              week2WednesdayHours: dayHourToNum(row.dailyHoursWeek2.Wed),
+              week2ThursdayHours: dayHourToNum(row.dailyHoursWeek2.Thu),
+              week2FridayHours: dayHourToNum(row.dailyHoursWeek2.Fri),
+              week2SaturdayHours: dayHourToNum(row.dailyHoursWeek2.Sat),
             }),
             ...(row.weekdayLabourRate !== "" && !Number.isNaN(Number(row.weekdayLabourRate)) && { weekdayLabourRate: Number(row.weekdayLabourRate) }),
           });
@@ -480,6 +683,14 @@ const SiteManager: React.FC<SiteManagerProps> = ({ onUpdateSite, onViewSite, ref
       setSubmitError("Site Name is required.");
       return;
     }
+    const noServiceValidation =
+      noServiceMode === "manual"
+        ? validateManualNoServiceRows(noServicePeriods)
+        : validateAutoNoServiceRows(noServicePeriods, form.state, noServiceYear);
+    if (noServiceValidation.error) {
+      setSubmitError(noServiceValidation.error);
+      return;
+    }
     const token = await getGraphAccessToken();
     if (!token) {
       setSubmitError("Not signed in. Sign in with Microsoft to save.");
@@ -495,6 +706,7 @@ const SiteManager: React.FC<SiteManagerProps> = ({ onUpdateSite, onViewSite, ref
           state: form.state || undefined,
           active: form.active !== false,
           monthlyRevenue: form.monthlyRevenue ?? null,
+          noServicePeriods: noServiceValidation.periods,
         });
         const siteId = created.id;
         const isMonthly = visitFrequency === "Monthly";
@@ -503,24 +715,24 @@ const SiteManager: React.FC<SiteManagerProps> = ({ onUpdateSite, onViewSite, ref
           await createSiteBudget(token, {
             budgetName: `${form.siteName.trim()} Budget`,
             siteListItemId: siteId,
-            sundayHours: isMonthly ? 0 : dailyHours.Sun,
-            mondayHours: isMonthly ? 0 : dailyHours.Mon,
-            tuesdayHours: isMonthly ? 0 : dailyHours.Tue,
-            wednesdayHours: isMonthly ? 0 : dailyHours.Wed,
-            thursdayHours: isMonthly ? 0 : dailyHours.Thu,
-            fridayHours: isMonthly ? 0 : dailyHours.Fri,
-            saturdayHours: isMonthly ? 0 : dailyHours.Sat,
+            sundayHours: isMonthly ? 0 : dayHourToNum(dailyHours.Sun),
+            mondayHours: isMonthly ? 0 : dayHourToNum(dailyHours.Mon),
+            tuesdayHours: isMonthly ? 0 : dayHourToNum(dailyHours.Tue),
+            wednesdayHours: isMonthly ? 0 : dayHourToNum(dailyHours.Wed),
+            thursdayHours: isMonthly ? 0 : dayHourToNum(dailyHours.Thu),
+            fridayHours: isMonthly ? 0 : dayHourToNum(dailyHours.Fri),
+            saturdayHours: isMonthly ? 0 : dayHourToNum(dailyHours.Sat),
             active: true,
             visitFrequency,
             ...(isMonthly && hoursPerVisit !== "" && { hoursPerVisit: Number(hoursPerVisit) }),
             ...(isFortnightly && {
-              week2SundayHours: dailyHoursWeek2.Sun,
-              week2MondayHours: dailyHoursWeek2.Mon,
-              week2TuesdayHours: dailyHoursWeek2.Tue,
-              week2WednesdayHours: dailyHoursWeek2.Wed,
-              week2ThursdayHours: dailyHoursWeek2.Thu,
-              week2FridayHours: dailyHoursWeek2.Fri,
-              week2SaturdayHours: dailyHoursWeek2.Sat,
+              week2SundayHours: dayHourToNum(dailyHoursWeek2.Sun),
+              week2MondayHours: dayHourToNum(dailyHoursWeek2.Mon),
+              week2TuesdayHours: dayHourToNum(dailyHoursWeek2.Tue),
+              week2WednesdayHours: dayHourToNum(dailyHoursWeek2.Wed),
+              week2ThursdayHours: dayHourToNum(dailyHoursWeek2.Thu),
+              week2FridayHours: dayHourToNum(dailyHoursWeek2.Fri),
+              week2SaturdayHours: dayHourToNum(dailyHoursWeek2.Sat),
             }),
             ...(weekdayLabourRate !== "" && !Number.isNaN(Number(weekdayLabourRate)) && Number(weekdayLabourRate) >= 0 && { weekdayLabourRate: Number(weekdayLabourRate) }),
             ...(saturdayLabourRate !== "" && saturdayLabourRate != null && !Number.isNaN(Number(saturdayLabourRate)) && Number(saturdayLabourRate) >= 0 && { saturdayLabourRate: Number(saturdayLabourRate) }),
@@ -549,29 +761,30 @@ const SiteManager: React.FC<SiteManagerProps> = ({ onUpdateSite, onViewSite, ref
           state: form.state || undefined,
           active: form.active,
           monthlyRevenue: form.monthlyRevenue ?? null,
+          noServicePeriods: noServiceValidation.periods,
         });
         const budget = budgetsBySiteId[String(editingSite.id)] ?? budgetsBySiteId["name:" + (editingSite.siteName.trim() + " Budget")];
         const isMonthly = visitFrequency === "Monthly";
         const isFortnightly = visitFrequency === "Fortnightly";
         const budgetPayload = {
-          sundayHours: isMonthly ? 0 : dailyHours.Sun,
-          mondayHours: isMonthly ? 0 : dailyHours.Mon,
-          tuesdayHours: isMonthly ? 0 : dailyHours.Tue,
-          wednesdayHours: isMonthly ? 0 : dailyHours.Wed,
-          thursdayHours: isMonthly ? 0 : dailyHours.Thu,
-          fridayHours: isMonthly ? 0 : dailyHours.Fri,
-          saturdayHours: isMonthly ? 0 : dailyHours.Sat,
+          sundayHours: isMonthly ? 0 : dayHourToNum(dailyHours.Sun),
+          mondayHours: isMonthly ? 0 : dayHourToNum(dailyHours.Mon),
+          tuesdayHours: isMonthly ? 0 : dayHourToNum(dailyHours.Tue),
+          wednesdayHours: isMonthly ? 0 : dayHourToNum(dailyHours.Wed),
+          thursdayHours: isMonthly ? 0 : dayHourToNum(dailyHours.Thu),
+          fridayHours: isMonthly ? 0 : dayHourToNum(dailyHours.Fri),
+          saturdayHours: isMonthly ? 0 : dayHourToNum(dailyHours.Sat),
           active: true,
           siteListItemId: editingSite.id,
           visitFrequency,
           hoursPerVisit: isMonthly && hoursPerVisit !== "" ? Number(hoursPerVisit) : (isFortnightly || visitFrequency === "Weekly" ? 0 : undefined),
-          week2SundayHours: isFortnightly ? dailyHoursWeek2.Sun : 0,
-          week2MondayHours: isFortnightly ? dailyHoursWeek2.Mon : 0,
-          week2TuesdayHours: isFortnightly ? dailyHoursWeek2.Tue : 0,
-          week2WednesdayHours: isFortnightly ? dailyHoursWeek2.Wed : 0,
-          week2ThursdayHours: isFortnightly ? dailyHoursWeek2.Thu : 0,
-          week2FridayHours: isFortnightly ? dailyHoursWeek2.Fri : 0,
-          week2SaturdayHours: isFortnightly ? dailyHoursWeek2.Sat : 0,
+          week2SundayHours: isFortnightly ? dayHourToNum(dailyHoursWeek2.Sun) : 0,
+          week2MondayHours: isFortnightly ? dayHourToNum(dailyHoursWeek2.Mon) : 0,
+          week2TuesdayHours: isFortnightly ? dayHourToNum(dailyHoursWeek2.Tue) : 0,
+          week2WednesdayHours: isFortnightly ? dayHourToNum(dailyHoursWeek2.Wed) : 0,
+          week2ThursdayHours: isFortnightly ? dayHourToNum(dailyHoursWeek2.Thu) : 0,
+          week2FridayHours: isFortnightly ? dayHourToNum(dailyHoursWeek2.Fri) : 0,
+          week2SaturdayHours: isFortnightly ? dayHourToNum(dailyHoursWeek2.Sat) : 0,
           ...(weekdayLabourRate !== "" && weekdayLabourRate != null && !Number.isNaN(Number(weekdayLabourRate)) && Number(weekdayLabourRate) >= 0 && { weekdayLabourRate: Number(weekdayLabourRate) }),
           ...(fortnightCostBudget !== "" && fortnightCostBudget != null && !Number.isNaN(Number(fortnightCostBudget)) && { fortnightCostBudget: Number(fortnightCostBudget) }),
           ...(saturdayLabourRate !== "" && saturdayLabourRate != null && !Number.isNaN(Number(saturdayLabourRate)) && Number(saturdayLabourRate) >= 0 && { saturdayLabourRate: Number(saturdayLabourRate) }),
@@ -874,16 +1087,16 @@ const SiteManager: React.FC<SiteManagerProps> = ({ onUpdateSite, onViewSite, ref
       ) : (
         <>
         <div className="so-table bg-white overflow-hidden table-scroll-mobile">
-          <table className="w-full border-collapse text-left min-w-0 table-auto md:table-fixed md:min-w-[900px]">
+          <table className="w-full border-collapse text-left min-w-0 table-auto md:table-fixed md:min-w-[1020px]">
             <colgroup className="hidden md:contents">
               {isAdmin && <col style={{ width: '4%' }} />}
-              <col style={{ width: isAdmin ? '16%' : '18%' }} />
-              <col style={{ width: isAdmin ? '16%' : '20%' }} />
+              <col style={{ width: isAdmin ? '15%' : '17%' }} />
+              <col style={{ width: isAdmin ? '15%' : '18%' }} />
               <col style={{ width: '6%' }} />
-              <col style={{ width: '11%' }} />
+              {isAdmin && <col style={{ width: '9%' }} />}
               <col style={{ width: '10%' }} />
-              <col style={{ width: isAdmin ? '19%' : '21%' }} />
-              <col style={{ width: '8%' }} />
+              <col style={{ width: isAdmin ? '17%' : '19%' }} />
+              <col style={{ width: '12%' }} />
               <col style={{ width: isAdmin ? '6%' : '8%' }} />
               {isAdmin && <col style={{ width: '10%' }} />}
             </colgroup>
@@ -930,8 +1143,12 @@ const SiteManager: React.FC<SiteManagerProps> = ({ onUpdateSite, onViewSite, ref
                     {siteSortBy === "state" && (siteSortDir === "asc" ? <ChevronUp size={12} /> : <ChevronDown size={12} />)}
                   </button>
                 </th>
+                {isAdmin && (
+                  <th className="hidden md:table-cell px-1.5 py-1.5 text-[10px] font-semibold text-gray-700 uppercase tracking-widest">
+                    Monthly revenue
+                  </th>
+                )}
                 <th className="hidden md:table-cell px-1.5 py-1.5 text-[10px] font-semibold text-gray-700 uppercase tracking-widest">Assigned managers</th>
-                <th className="hidden md:table-cell px-1.5 py-1.5 text-[10px] font-semibold text-gray-700 uppercase tracking-widest">Assigned cleaners</th>
                 <th className="px-2 py-2 md:px-1.5 md:py-1.5 text-[10px] font-semibold text-gray-700 uppercase tracking-widest">Daily hours</th>
                 <th className="hidden md:table-cell px-1.5 py-1.5 text-[10px] font-semibold text-gray-700 uppercase tracking-widest">Weekday rate</th>
                 <th className="px-2 py-2 md:px-1.5 md:py-1.5">
@@ -1011,6 +1228,22 @@ const SiteManager: React.FC<SiteManagerProps> = ({ onUpdateSite, onViewSite, ref
                 <td className="hidden md:table-cell px-1.5 py-1.5 align-top whitespace-nowrap">
                   <span className="text-[11px] font-medium text-gray-700">{site.state || "—"}</span>
                 </td>
+                {isAdmin && (
+                  <td className="hidden md:table-cell px-1.5 py-1.5 align-top whitespace-nowrap">
+                    {site.monthlyRevenue != null ? (
+                      <span className="text-[11px] font-medium text-gray-700">
+                        {new Intl.NumberFormat("en-AU", {
+                          style: "currency",
+                          currency: "AUD",
+                          minimumFractionDigits: 2,
+                          maximumFractionDigits: 2,
+                        }).format(Number(site.monthlyRevenue))}
+                      </span>
+                    ) : (
+                      <span className="text-[10px] text-gray-400">—</span>
+                    )}
+                  </td>
+                )}
                 <td className="hidden md:table-cell px-1.5 py-1.5 align-top">
                   {(() => {
                     const { assignedManagers } = assignedManagersBySiteId[site.id] ?? { assignedManagers: [] };
@@ -1043,37 +1276,21 @@ const SiteManager: React.FC<SiteManagerProps> = ({ onUpdateSite, onViewSite, ref
                     );
                   })()}
                 </td>
-                <td className="hidden md:table-cell px-1.5 py-1.5 align-top">
-                  {(() => {
-                    const cleanerNames = assignedCleanersBySiteId[normalizeListItemId(site.id)] ?? [];
-                    if (cleanerNames.length === 0) {
-                      return <span className="text-[10px] text-gray-400">—</span>;
-                    }
-                    const primaryName = cleanerNames[0]?.trim() || "";
-                    const hasMore = cleanerNames.length > 1;
-                    return (
-                      <span className="text-[11px] font-medium text-gray-700 break-words" title={hasMore ? cleanerNames.join(", ") : undefined}>
-                        {primaryName}
-                        {hasMore ? (
-                          <span className="text-[10px] text-gray-500">, +{cleanerNames.length - 1} more</span>
-                        ) : null}
-                      </span>
-                    );
-                  })()}
-                </td>
                 <td className="px-2 py-2 md:px-1.5 md:py-1.5 align-top">
                   {dayHours.length > 0 ? (
-                    <div className="grid grid-cols-7 gap-1 md:gap-px bg-[#edeef0] rounded border border-[#edeef0] overflow-hidden max-w-full md:max-w-[200px]">
+                    <div className="grid grid-cols-7 gap-1 md:gap-px bg-[#edeef0] rounded border border-[#edeef0] overflow-hidden max-w-full md:max-w-[250px]">
                       {dayHours.map(({ day, h }) => (
                         <div
                           key={day}
                           className={`bg-white px-1.5 py-1 md:px-0.5 md:py-0.5 text-center min-w-0 ${
-                            (h ?? 0) > 0 ? "text-blue-700" : "text-gray-400"
+                            h != null && h > 0 ? "text-blue-700" : "text-gray-400"
                           }`}
-                          title={`${day}: ${h ?? 0}h`}
+                          title={h !== undefined ? `${day}: ${h}h` : `${day}: not set`}
                         >
                           <span className="block text-[9px] md:text-[8px] font-medium uppercase leading-tight text-gray-500">{day.length > 2 ? day.charAt(0) : day}</span>
-                          <span className="block text-xs md:text-[10px] font-bold tabular-nums mt-0.5">{(h ?? 0) > 0 ? Number(h) : "0"}</span>
+                          <span className="block text-xs md:text-[10px] font-bold tabular-nums mt-0.5">
+                            {h !== undefined ? String(h) : "—"}
+                          </span>
                         </div>
                       ))}
                     </div>
@@ -1082,7 +1299,7 @@ const SiteManager: React.FC<SiteManagerProps> = ({ onUpdateSite, onViewSite, ref
                   )}
                 </td>
                 <td className="hidden md:table-cell px-1.5 py-1.5 align-top">
-                  {budgetRate != null && budgetRate > 0 ? (
+                  {budgetRate != null && budgetRate >= 0 ? (
                     <span className="text-[11px] font-medium text-gray-700">${Number(budgetRate).toFixed(2)}/hr</span>
                   ) : (
                     <span className="text-[10px] text-gray-400">—</span>
@@ -1264,8 +1481,7 @@ const SiteManager: React.FC<SiteManagerProps> = ({ onUpdateSite, onViewSite, ref
                         const next = e.target.value as VisitFreq;
                         setVisitFrequency(next);
                         if (next === "Fortnightly") {
-                          const week2Sum = DAY_KEYS.reduce((s, d) => s + dailyHoursWeek2[d], 0);
-                          if (week2Sum === 0) setDailyHoursWeek2({ ...dailyHours });
+                          if (sumDayHours(dailyHoursWeek2) === 0) setDailyHoursWeek2({ ...dailyHours });
                         }
                       }}
                       className="w-full border border-[#edeef0] rounded-lg px-3 py-2 text-sm"
@@ -1362,9 +1578,10 @@ const SiteManager: React.FC<SiteManagerProps> = ({ onUpdateSite, onViewSite, ref
                         min={0}
                         step={0.5}
                         value={dailyHours[day]}
-                        onChange={(e) =>
-                          setDailyHours((h) => ({ ...h, [day]: parseFloat(e.target.value) || 0 }))
-                        }
+                        onChange={(e) => {
+                          const v = e.target.value;
+                          setDailyHours((h) => ({ ...h, [day]: v === "" ? "" : parseFloat(v) || 0 }));
+                        }}
                         className="w-full border border-[#edeef0] rounded-lg px-2 py-1.5 text-sm"
                       />
                     </div>
@@ -1384,9 +1601,10 @@ const SiteManager: React.FC<SiteManagerProps> = ({ onUpdateSite, onViewSite, ref
                             min={0}
                             step={0.5}
                             value={dailyHours[day]}
-                            onChange={(e) =>
-                              setDailyHours((h) => ({ ...h, [day]: parseFloat(e.target.value) || 0 }))
-                            }
+                            onChange={(e) => {
+                              const v = e.target.value;
+                              setDailyHours((h) => ({ ...h, [day]: v === "" ? "" : parseFloat(v) || 0 }));
+                            }}
                             className="w-full border border-[#edeef0] rounded-lg px-2 py-1.5 text-sm"
                           />
                         </div>
@@ -1404,9 +1622,10 @@ const SiteManager: React.FC<SiteManagerProps> = ({ onUpdateSite, onViewSite, ref
                             min={0}
                             step={0.5}
                             value={dailyHoursWeek2[day]}
-                            onChange={(e) =>
-                              setDailyHoursWeek2((h) => ({ ...h, [day]: parseFloat(e.target.value) || 0 }))
-                            }
+                            onChange={(e) => {
+                              const v = e.target.value;
+                              setDailyHoursWeek2((h) => ({ ...h, [day]: v === "" ? "" : parseFloat(v) || 0 }));
+                            }}
                             className="w-full border border-[#edeef0] rounded-lg px-2 py-1.5 text-sm"
                           />
                         </div>
@@ -1417,6 +1636,182 @@ const SiteManager: React.FC<SiteManagerProps> = ({ onUpdateSite, onViewSite, ref
                 )}
               </div>
               )}
+
+              <div>
+                <h4 className="text-xs font-bold text-gray-500 uppercase tracking-widest mb-3">No Service Periods</h4>
+                <p className="text-[10px] text-gray-400 mb-2">
+                  Used for school holidays, shutdowns, client closures, and seasonal pauses. Matching dates will show as 0h / On Target in Timesheets.
+                </p>
+                <div className="mb-3">
+                  <label className="block text-[10px] font-bold text-gray-400 uppercase mb-1">No service mode</label>
+                  <div className="inline-flex rounded-lg border border-[#edeef0] p-0.5 bg-gray-50/80">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setNoServiceMode("manual");
+                        setNoServiceHolidayMessage(null);
+                      }}
+                      className={`px-3 py-1.5 text-xs font-bold rounded-md transition-colors ${
+                        noServiceMode === "manual"
+                          ? "bg-gray-900 text-white"
+                          : "text-gray-600 hover:text-gray-900"
+                      }`}
+                    >
+                      Manual
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setNoServiceMode("school_auto");
+                        setNoServiceHolidayMessage(null);
+                      }}
+                      className={`px-3 py-1.5 text-xs font-bold rounded-md transition-colors ${
+                        noServiceMode === "school_auto"
+                          ? "bg-gray-900 text-white"
+                          : "text-gray-600 hover:text-gray-900"
+                      }`}
+                    >
+                      School Holidays (Auto)
+                    </button>
+                  </div>
+                </div>
+
+                {noServiceMode === "school_auto" && (
+                  <div className="mb-3 space-y-2 rounded-lg border border-[#edeef0] bg-gray-50/50 px-3 py-2">
+                    <p className="text-[10px] text-gray-500">
+                      Uses the site <strong>State</strong> and selected <strong>Year</strong> to populate school holiday no-service periods. Click Save to write them to the site.
+                    </p>
+                    <div className="flex flex-wrap items-end gap-3">
+                      <div>
+                        <span className="block text-[10px] font-bold text-gray-400 uppercase mb-1">State (from site)</span>
+                        <span className="inline-block text-sm font-semibold text-gray-800 min-w-[3rem]">
+                          {form.state.trim() ? form.state.trim().toUpperCase() : "—"}
+                        </span>
+                      </div>
+                      <div>
+                        <label className="block text-[10px] font-bold text-gray-400 uppercase mb-1">Year</label>
+                        <select
+                          value={noServiceYear}
+                          onChange={(e) => {
+                            setNoServiceYear(Number(e.target.value));
+                            setNoServiceHolidayMessage(null);
+                          }}
+                          className="border border-[#edeef0] rounded-lg px-2 py-1.5 text-sm bg-white min-w-[5.5rem]"
+                        >
+                          {schoolHolidayYearOptions.map((y) => (
+                            <option key={y} value={y}>
+                              {y}
+                            </option>
+                          ))}
+                        </select>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={handlePopulateSchoolHolidays}
+                        disabled={!form.state.trim()}
+                        className="px-3 py-1.5 text-xs font-bold text-white bg-gray-900 rounded-lg hover:bg-gray-800 disabled:opacity-40 disabled:cursor-not-allowed"
+                      >
+                        Populate School Holidays
+                      </button>
+                    </div>
+                    {!form.state.trim() && (
+                      <p className="text-[10px] text-amber-700">Select <strong>State</strong> in the site details above before populating.</p>
+                    )}
+                    {noServiceHolidayMessage && (
+                      <p
+                        className={`text-[10px] ${
+                          noServiceHolidayMessage.startsWith("Loaded")
+                            ? "text-green-700"
+                            : "text-amber-800"
+                        }`}
+                      >
+                        {noServiceHolidayMessage}
+                      </p>
+                    )}
+                  </div>
+                )}
+
+                <div className="space-y-2">
+                  {noServicePeriods.map((row) => (
+                    <div key={row.id} className="grid grid-cols-1 sm:grid-cols-12 gap-2 items-end">
+                      <div className="sm:col-span-3">
+                        <label className="block text-[10px] font-bold text-gray-400 uppercase mb-1">Label</label>
+                        <input
+                          type="text"
+                          value={row.label}
+                          readOnly={noServiceMode === "school_auto"}
+                          onChange={(e) => {
+                            const v = e.target.value;
+                            setNoServicePeriods((prev) => prev.map((p) => (p.id === row.id ? { ...p, label: v } : p)));
+                          }}
+                          className="w-full border border-[#edeef0] rounded-lg px-2 py-1.5 text-sm read-only:bg-gray-50 read-only:text-gray-700"
+                          placeholder="Term Holidays"
+                        />
+                      </div>
+                      <div className="sm:col-span-3">
+                        <label className="block text-[10px] font-bold text-gray-400 uppercase mb-1">Start Date</label>
+                        <input
+                          type="date"
+                          value={row.startDate}
+                          readOnly={noServiceMode === "school_auto"}
+                          onChange={(e) => {
+                            const v = e.target.value;
+                            setNoServicePeriods((prev) => prev.map((p) => (p.id === row.id ? { ...p, startDate: v } : p)));
+                          }}
+                          className="w-full border border-[#edeef0] rounded-lg px-2 py-1.5 text-sm read-only:bg-gray-50"
+                        />
+                      </div>
+                      <div className="sm:col-span-3">
+                        <label className="block text-[10px] font-bold text-gray-400 uppercase mb-1">End Date</label>
+                        <input
+                          type="date"
+                          value={row.endDate}
+                          readOnly={noServiceMode === "school_auto"}
+                          onChange={(e) => {
+                            const v = e.target.value;
+                            setNoServicePeriods((prev) => prev.map((p) => (p.id === row.id ? { ...p, endDate: v } : p)));
+                          }}
+                          className="w-full border border-[#edeef0] rounded-lg px-2 py-1.5 text-sm read-only:bg-gray-50"
+                        />
+                      </div>
+                      <div className="sm:col-span-2">
+                        <label className="block text-[10px] font-bold text-gray-400 uppercase mb-1">Reason</label>
+                        <input
+                          type="text"
+                          value={row.reason}
+                          readOnly={noServiceMode === "school_auto"}
+                          onChange={(e) => {
+                            const v = e.target.value;
+                            setNoServicePeriods((prev) => prev.map((p) => (p.id === row.id ? { ...p, reason: v } : p)));
+                          }}
+                          className="w-full border border-[#edeef0] rounded-lg px-2 py-1.5 text-sm read-only:bg-gray-50"
+                          placeholder="Optional"
+                        />
+                      </div>
+                      <div className="sm:col-span-1">
+                        <button
+                          type="button"
+                          disabled={noServiceMode === "school_auto"}
+                          onClick={() => setNoServicePeriods((prev) => prev.filter((p) => p.id !== row.id))}
+                          className="w-full px-2 py-1.5 text-xs font-bold text-gray-600 hover:bg-gray-100 rounded-lg border border-[#edeef0] disabled:opacity-40 disabled:cursor-not-allowed"
+                          title="Remove period"
+                        >
+                          Remove
+                        </button>
+                      </div>
+                    </div>
+                  ))}
+                  {noServiceMode === "manual" && (
+                    <button
+                      type="button"
+                      onClick={() => setNoServicePeriods((prev) => [...prev, createNoServiceRow()])}
+                      className="px-3 py-1.5 text-xs font-bold text-gray-700 hover:bg-gray-100 rounded-lg border border-[#edeef0]"
+                    >
+                      + Add Period
+                    </button>
+                  )}
+                </div>
+              </div>
 
               <div>
                 <h4 className="text-xs font-bold text-gray-500 uppercase tracking-widest mb-3">Personnel &amp; Rates</h4>
@@ -1649,11 +2044,12 @@ const SiteManager: React.FC<SiteManagerProps> = ({ onUpdateSite, onViewSite, ref
                                 min={0}
                                 step={0.5}
                                 value={row.visitFrequency === "Monthly" ? "" : row.dailyHours[day]}
-                                onChange={(e) =>
+                                onChange={(e) => {
+                                  const v = e.target.value;
                                   updateBulkRow(row.id, {
-                                    dailyHours: { ...row.dailyHours, [day]: parseFloat(e.target.value) || 0 },
-                                  })
-                                }
+                                    dailyHours: { ...row.dailyHours, [day]: v === "" ? "" : parseFloat(v) || 0 },
+                                  });
+                                }}
                                 disabled={bulkSubmitLoading || row.visitFrequency === "Monthly"}
                                 className="w-full border border-[#edeef0] rounded px-0.5 py-1 text-xs text-center"
                               />
@@ -1666,11 +2062,12 @@ const SiteManager: React.FC<SiteManagerProps> = ({ onUpdateSite, onViewSite, ref
                                 min={0}
                                 step={0.5}
                                 value={row.visitFrequency === "Fortnightly" ? row.dailyHoursWeek2[day] : ""}
-                                onChange={(e) =>
+                                onChange={(e) => {
+                                  const v = e.target.value;
                                   updateBulkRow(row.id, {
-                                    dailyHoursWeek2: { ...row.dailyHoursWeek2, [day]: parseFloat(e.target.value) || 0 },
-                                  })
-                                }
+                                    dailyHoursWeek2: { ...row.dailyHoursWeek2, [day]: v === "" ? "" : parseFloat(v) || 0 },
+                                  });
+                                }}
                                 disabled={bulkSubmitLoading || row.visitFrequency !== "Fortnightly"}
                                 className="w-full border border-[#edeef0] rounded px-0.5 py-1 text-xs text-center"
                               />

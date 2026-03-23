@@ -1,6 +1,6 @@
 
 import React from 'react';
-import { LayoutDashboard, Building2, Users, Clock, BrainCircuit, ShieldCheck, ChevronRight, KeyRound, X, Briefcase } from 'lucide-react';
+import { LayoutDashboard, Building2, Users, Clock, BrainCircuit, ChevronRight, KeyRound, X, Briefcase } from 'lucide-react';
 import { ViewType } from '../types';
 import { useAppAuth } from '../contexts/AppAuthContext';
 
@@ -28,7 +28,7 @@ const Sidebar: React.FC<SidebarProps> = ({ currentView, onViewChange, mobileOpen
     ...(user?.role === 'Admin'
       ? [{ id: 'team', label: 'Team', icon: Users }]
       : []),
-    { id: 'cleaners', label: 'Cleaner Team', icon: Users },
+    { id: 'cleaners', label: 'Workforce', icon: Users },
     { id: 'timesheets', label: 'Timesheets', icon: Clock },
     { id: 'adhoc-jobs', label: 'Ad Hoc Jobs', icon: Briefcase },
     { id: 'insights', label: 'AI Insights', icon: BrainCircuit },
@@ -39,12 +39,16 @@ const Sidebar: React.FC<SidebarProps> = ({ currentView, onViewChange, mobileOpen
     <>
       <div className="px-5 py-5 mb-2 flex flex-col gap-4 so-sidebar-header border-b border-white/5">
         <div className="flex items-center gap-3 rounded-lg px-1.5 py-1.5 cursor-default">
-          <div className="bg-slate-900/80 p-1.5 rounded-md shadow-sm border border-white/10">
-            <ShieldCheck className="text-white" size={16} />
+          <div className="h-8 w-8 rounded-md bg-white/90 p-1.5 shadow-sm">
+            <img
+              src="/images/a_adept.png"
+              alt="Adept Timesheet Ops logo"
+              className="h-full w-full object-contain"
+            />
           </div>
           <div className="min-w-0">
-            <h1 className="font-semibold text-[14px] text-slate-50 truncate">CleanTrack Ops</h1>
-            <p className="text-[11px] text-slate-300 truncate">Slate Ops workspace</p>
+            <h1 className="font-semibold text-[14px] text-slate-50 truncate">Adept Timesheet Ops</h1>
+            <p className="text-[11px] text-slate-300 truncate">Operations workspace</p>
           </div>
         </div>
 

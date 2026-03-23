@@ -145,13 +145,14 @@ export async function createSiteBudget(
 export interface SiteBudgetHours {
   siteListItemId: string;
   budgetListItemId?: string;
-  sunday: number;
-  monday: number;
-  tuesday: number;
-  wednesday: number;
-  thursday: number;
-  friday: number;
-  saturday: number;
+  /** Omitted when the column is empty / absent in SharePoint (UI shows blank). */
+  sunday?: number;
+  monday?: number;
+  tuesday?: number;
+  wednesday?: number;
+  thursday?: number;
+  friday?: number;
+  saturday?: number;
   weekTotal: number;
   fortnightCap: number;
   /** Weekly | Fortnightly | Monthly */
@@ -198,6 +199,82 @@ function toCurrencyNum(v: unknown): number {
     if (val != null) return toNum(val);
   }
   return 0;
+}
+
+/** Fields that may exist on a “secondary” budget row when the primary row wins on weekTotal. */
+const BUDGET_MERGE_OPTIONAL_KEYS: (keyof SiteBudgetHours)[] = [
+  "fortnightCostBudget",
+  "weekdayLabourRate",
+  "saturdayLabourRate",
+  "sundayLabourRate",
+  "phLabourRate",
+  "budgetLabourRate",
+  "weekendLabourRate",
+  "sunday",
+  "monday",
+  "tuesday",
+  "wednesday",
+  "thursday",
+  "friday",
+  "saturday",
+  "week2Sunday",
+  "week2Monday",
+  "week2Tuesday",
+  "week2Wednesday",
+  "week2Thursday",
+  "week2Friday",
+  "week2Saturday",
+  "hoursPerVisit",
+];
+
+/**
+ * When multiple budget list items point at the same site, we pick the row with the highest weekTotal for
+ * core hour totals — but cost, rates, or per-day values may live on another row. Merge so we don't drop them.
+ */
+function mergeBudgetRowsForSameSite(
+  existing: SiteBudgetHours | undefined,
+  incoming: SiteBudgetHours
+): SiteBudgetHours {
+  if (!existing) return incoming;
+  const primary =
+    incoming.weekTotal > existing.weekTotal
+      ? incoming
+      : existing.weekTotal > incoming.weekTotal
+        ? existing
+        : existing;
+  const secondary =
+    incoming.weekTotal > existing.weekTotal
+      ? existing
+      : existing.weekTotal > incoming.weekTotal
+        ? incoming
+        : incoming;
+  let merged: SiteBudgetHours = { ...primary };
+  if (!merged.visitFrequency && secondary.visitFrequency) {
+    merged = { ...merged, visitFrequency: secondary.visitFrequency };
+  }
+  for (const key of BUDGET_MERGE_OPTIONAL_KEYS) {
+    const pv = merged[key];
+    const sv = secondary[key];
+    if ((pv === undefined || pv === null) && typeof sv === "number" && !Number.isNaN(sv)) {
+      merged = { ...merged, [key]: sv } as SiteBudgetHours;
+    }
+  }
+  return merged;
+}
+
+/** Discover Fortnight Cost Budget when internal column name differs per tenant. */
+function findFortnightCostBudgetFromFields(f: Record<string, unknown>): number | undefined {
+  for (const key of Object.keys(f)) {
+    const lower = key.toLowerCase();
+    if (!lower.includes("fortnight")) continue;
+    if (!lower.includes("cost")) continue;
+    if (!lower.includes("budget")) continue;
+    const v = f[key];
+    if (v === undefined || v === null || v === "") continue;
+    const n = toCurrencyNum(v);
+    if (!Number.isNaN(n) && n >= 0) return n;
+  }
+  return undefined;
 }
 
 /** Load all site budgets and return hours per site (prefer budget with highest week total when multiple exist).
@@ -253,11 +330,47 @@ export async function getSiteBudgets(
   const visitFreqKeys = ["VisitFrequency", "Visit_x0020_Frequency", "Visit Frequency"];
   const hoursPerVisitKeys = ["HoursPerVisit", "Hours_x0020_per_x0020_Visit", "Hours per Visit"];
   /** Schema: Weekday Labour Rate (renamed from Budget Labour Rate), Saturday/Sunday/PH Labour Rate, Fortnight Cost Budget — all Currency in SharePoint. */
-  const fortnightCostBudgetKeys = ["Fortnight Cost Budget", "FortnightCostBudget", "Fortnight_x0020_Cost_x0020_Budget"];
-  const weekdayLabourRateKeys = ["Weekday Labour Rate", "WeekdayLabourRate", "Budget Labour Rate", "BudgetLabourRate"];
-  const saturdayLabourRateKeys = ["Saturday Labour Rate", "SaturdayLabourRate", "Weekend Labour Rate", "WeekendLabourRate"];
-  const sundayLabourRateKeys = ["Sunday Labour Rate", "SundayLabourRate", "Weekend Labour Rate", "WeekendLabourRate"];
-  const phLabourRateKeys = ["PH Labour Rate", "PHLabourRate", "Public Holiday Labour Rate", "PublicHolidayLabourRate"];
+  const fortnightCostBudgetKeys = [
+    "Fortnight Cost Budget",
+    "FortnightCostBudget",
+    "Fortnight_x0020_Cost_x0020_Budget",
+    "Fortnightly Cost Budget",
+    "FortnightlyCostBudget",
+    "Fortnightly_x0020_Cost_x0020_Budget",
+  ];
+  // Graph list item fields use INTERNAL column names. Include common encoded-name variants.
+  const weekdayLabourRateKeys = [
+    "Weekday Labour Rate",
+    "WeekdayLabourRate",
+    "Weekday_x0020_Labour_x0020_Rate",
+    "Budget Labour Rate",
+    "BudgetLabourRate",
+    "Budget_x0020_Labour_x0020_Rate",
+  ];
+  const saturdayLabourRateKeys = [
+    "Saturday Labour Rate",
+    "SaturdayLabourRate",
+    "Saturday_x0020_Labour_x0020_Rate",
+    "Weekend Labour Rate",
+    "WeekendLabourRate",
+    "Weekend_x0020_Labour_x0020_Rate",
+  ];
+  const sundayLabourRateKeys = [
+    "Sunday Labour Rate",
+    "SundayLabourRate",
+    "Sunday_x0020_Labour_x0020_Rate",
+    "Weekend Labour Rate",
+    "WeekendLabourRate",
+    "Weekend_x0020_Labour_x0020_Rate",
+  ];
+  const phLabourRateKeys = [
+    "PH Labour Rate",
+    "PHLabourRate",
+    "PH_x0020_Labour_x0020_Rate",
+    "Public Holiday Labour Rate",
+    "PublicHolidayLabourRate",
+    "Public_x0020_Holiday_x0020_Labour_x0020_Rate",
+  ];
   const budgetLabourRateKeys = ["Budget Labour Rate", "BudgetLabourRate", "Budget_x0020_Labour_x0020_Rate"];
   const weekendLabourRateKeys = ["Weekend Labour Rate", "WeekendLabourRate", "Weekend_x0020_Labour_x0020_Rate"];
 
@@ -268,30 +381,35 @@ export async function getSiteBudgets(
     const sid = f["SiteLookupId"] ?? f["SiteId"] ?? f["Site"];
     const siteIdStr = normalizeSiteId(sid);
 
-    const getHours = (keys: string[]) => {
+    /** Only return a number when SharePoint sent a value for that column (null/absent → undefined, 0 → 0). */
+    const getHoursOptional = (keys: string[]): number | undefined => {
       for (const k of keys) {
+        if (!Object.prototype.hasOwnProperty.call(f, k)) continue;
         const v = f[k];
-        if (v !== undefined && v !== null) return toNum(v);
+        if (v === null || v === undefined || v === "") continue;
+        return toNum(v);
       }
-      return 0;
+      return undefined;
     };
-    const sun = getHours(hourKeyVariants.sun);
-    const mon = getHours(hourKeyVariants.mon);
-    const tue = getHours(hourKeyVariants.tue);
-    const wed = getHours(hourKeyVariants.wed);
-    const thu = getHours(hourKeyVariants.thu);
-    const fri = getHours(hourKeyVariants.fri);
-    const sat = getHours(hourKeyVariants.sat);
-    const weekTotal = sun + mon + tue + wed + thu + fri + sat;
+    const sun = getHoursOptional(hourKeyVariants.sun);
+    const mon = getHoursOptional(hourKeyVariants.mon);
+    const tue = getHoursOptional(hourKeyVariants.tue);
+    const wed = getHoursOptional(hourKeyVariants.wed);
+    const thu = getHoursOptional(hourKeyVariants.thu);
+    const fri = getHoursOptional(hourKeyVariants.fri);
+    const sat = getHoursOptional(hourKeyVariants.sat);
+    const weekTotal =
+      (sun ?? 0) + (mon ?? 0) + (tue ?? 0) + (wed ?? 0) + (thu ?? 0) + (fri ?? 0) + (sat ?? 0);
 
-    const sun2 = getHours(week2KeyVariants.sun);
-    const mon2 = getHours(week2KeyVariants.mon);
-    const tue2 = getHours(week2KeyVariants.tue);
-    const wed2 = getHours(week2KeyVariants.wed);
-    const thu2 = getHours(week2KeyVariants.thu);
-    const fri2 = getHours(week2KeyVariants.fri);
-    const sat2 = getHours(week2KeyVariants.sat);
-    const week2Total = sun2 + mon2 + tue2 + wed2 + thu2 + fri2 + sat2;
+    const sun2 = getHoursOptional(week2KeyVariants.sun);
+    const mon2 = getHoursOptional(week2KeyVariants.mon);
+    const tue2 = getHoursOptional(week2KeyVariants.tue);
+    const wed2 = getHoursOptional(week2KeyVariants.wed);
+    const thu2 = getHoursOptional(week2KeyVariants.thu);
+    const fri2 = getHoursOptional(week2KeyVariants.fri);
+    const sat2 = getHoursOptional(week2KeyVariants.sat);
+    const week2Total =
+      (sun2 ?? 0) + (mon2 ?? 0) + (tue2 ?? 0) + (wed2 ?? 0) + (thu2 ?? 0) + (fri2 ?? 0) + (sat2 ?? 0);
 
     const getFirst = (keys: string[]): string | undefined => {
       for (const k of keys) {
@@ -321,7 +439,10 @@ export async function getSiteBudgets(
     const visitFrequencyRaw = getFirst(visitFreqKeys);
     const visitFrequency = normalizeVisitFreq(visitFrequencyRaw);
     const hoursPerVisit = getFirstNum(hoursPerVisitKeys);
-    const fortnightCostBudget = getFirstCurrencyNum(fortnightCostBudgetKeys) ?? getFirstNum(fortnightCostBudgetKeys);
+    const fortnightCostBudget =
+      getFirstCurrencyNum(fortnightCostBudgetKeys) ??
+      getFirstNum(fortnightCostBudgetKeys) ??
+      findFortnightCostBudgetFromFields(f);
     const weekdayLabourRate = getFirstCurrencyNum(weekdayLabourRateKeys) ?? getFirstCurrencyNum(budgetLabourRateKeys);
     const saturdayLabourRate = getFirstCurrencyNum(saturdayLabourRateKeys) ?? getFirstCurrencyNum(weekendLabourRateKeys);
     const sundayLabourRate = getFirstCurrencyNum(sundayLabourRateKeys) ?? getFirstCurrencyNum(weekendLabourRateKeys);
@@ -343,13 +464,13 @@ export async function getSiteBudgets(
     const entry: SiteBudgetHours = {
       siteListItemId: siteIdStr,
       budgetListItemId: item.id,
-      sunday: sun,
-      monday: mon,
-      tuesday: tue,
-      wednesday: wed,
-      thursday: thu,
-      friday: fri,
-      saturday: sat,
+      ...(sun !== undefined && { sunday: sun }),
+      ...(mon !== undefined && { monday: mon }),
+      ...(tue !== undefined && { tuesday: tue }),
+      ...(wed !== undefined && { wednesday: wed }),
+      ...(thu !== undefined && { thursday: thu }),
+      ...(fri !== undefined && { friday: fri }),
+      ...(sat !== undefined && { saturday: sat }),
       weekTotal,
       fortnightCap,
       ...(visitFrequency && { visitFrequency }),
@@ -359,30 +480,25 @@ export async function getSiteBudgets(
       ...(saturdayLabourRate != null && saturdayLabourRate >= 0 && { saturdayLabourRate }),
       ...(sundayLabourRate != null && sundayLabourRate >= 0 && { sundayLabourRate }),
       ...(phLabourRate != null && phLabourRate >= 0 && { phLabourRate }),
-      ...(budgetLabourRate != null && budgetLabourRate > 0 && { budgetLabourRate }),
+      ...(budgetLabourRate != null && budgetLabourRate >= 0 && { budgetLabourRate }),
       ...(weekendLabourRate != null && weekendLabourRate >= 0 && { weekendLabourRate }),
-      ...(week2Total > 0 || sun2 || mon2 || tue2 || wed2 || thu2 || fri2 || sat2
-        ? {
-            week2Sunday: sun2,
-            week2Monday: mon2,
-            week2Tuesday: tue2,
-            week2Wednesday: wed2,
-            week2Thursday: thu2,
-            week2Friday: fri2,
-            week2Saturday: sat2,
-          }
-        : {}),
+      ...(sun2 !== undefined && { week2Sunday: sun2 }),
+      ...(mon2 !== undefined && { week2Monday: mon2 }),
+      ...(tue2 !== undefined && { week2Tuesday: tue2 }),
+      ...(wed2 !== undefined && { week2Wednesday: wed2 }),
+      ...(thu2 !== undefined && { week2Thursday: thu2 }),
+      ...(fri2 !== undefined && { week2Friday: fri2 }),
+      ...(sat2 !== undefined && { week2Saturday: sat2 }),
     };
 
     if (siteIdStr) {
-      const existing = result[siteIdStr];
-      if (!existing || existing.weekTotal < weekTotal) result[siteIdStr] = entry;
+      result[siteIdStr] = mergeBudgetRowsForSameSite(result[siteIdStr], entry);
     }
     const budgetName = getBudgetName(f);
     if (budgetName) {
       const nameKey = "name:" + budgetName;
-      const existing = result[nameKey];
-      if (!existing || existing.weekTotal < weekTotal) result[nameKey] = { ...entry, siteListItemId: siteIdStr || "" };
+      const namedEntry = { ...entry, siteListItemId: siteIdStr || "" };
+      result[nameKey] = mergeBudgetRowsForSameSite(result[nameKey], namedEntry);
     }
   }
   return result;

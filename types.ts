@@ -15,6 +15,8 @@ export interface Site {
   is_active: boolean;
   budgeted_hours_per_fortnight: number;
   daily_budgets: number[];
+  /** Fortnightly budgets: optional Week 2 day hours (Sun..Sat). */
+  daily_budgets_week2?: number[];
   assigned_cleaner_ids: string[];
   monthly_revenue: number;
   financial_budget: number;
@@ -29,6 +31,18 @@ export interface Site {
   managers?: Profile[]; // Joined data
   /** Weekly | Fortnightly | Monthly – from site budget */
   visit_frequency?: string;
+  /** Site-level date windows where planned service is intentionally paused. */
+  no_service_periods?: NoServicePeriod[];
+}
+
+export interface NoServicePeriod {
+  label?: string;
+  start_date: string; // yyyy-MM-dd
+  end_date: string; // yyyy-MM-dd
+  reason?: string;
+  source?: string;
+  state?: string;
+  year?: number;
 }
 
 export interface Cleaner {
@@ -41,6 +55,8 @@ export interface Cleaner {
   bankBsb: string;
   bankAccountNumber: string;
   payRatePerHour: number;
+  /** Workforce classification. */
+  type?: "cleaner" | "contractor";
 }
 
 export interface TimeEntry {
@@ -56,19 +72,6 @@ export interface TimeEntry {
   adhocJobId?: string;
   /** Display name of linked Ad Hoc Job. */
   adhocJobName?: string;
-}
-
-export interface TimeBatch {
-  id: string;
-  site_id: string;
-  cleaner_id: string;
-  fortnight_start: string;
-  fortnight_end: string;
-  status: 'open' | 'locked';
-  updated_at: string;
-  updated_by: string;
-  editor_name?: string; // Joined profile name
-  entries?: TimeEntry[];
 }
 
 /** Ad Hoc Job from CleanTrack Ad Hoc Jobs list (new schema). */
@@ -150,6 +153,43 @@ export interface FortnightPeriod {
   startDate: Date;
   endDate: Date;
   id: string;
+}
+
+/** Fixed vocabulary for timesheet period notes (managers tag context). */
+export const TIMESHEET_NOTE_TAG_OPTIONS = [
+  "Incomplete / under-delivered hours",
+  "Site ending / no service next period",
+  "Cleaner last period",
+  "Cleaner change / handover",
+  "Schedule / plan change",
+  "Other",
+] as const;
+
+export type TimesheetNoteTag = (typeof TIMESHEET_NOTE_TAG_OPTIONS)[number];
+
+/** One row in CleanTrack Timesheet Period Notes (site + fortnight, optional cleaner). */
+export interface TimesheetPeriodNote {
+  id: string;
+  siteId: string;
+  /** Display name from Site lookup when Graph returns it (export / fallback join). */
+  siteLookupName?: string;
+  /** yyyy-MM-dd, first day of the pay fortnight */
+  periodStartYmd: string;
+  cleanerId: string | null;
+  tags: string[];
+  noteBody: string;
+}
+
+export function serializeTags(tags: string[]): string {
+  return tags.map((t) => t.trim()).filter(Boolean).join("; ");
+}
+
+export function deserializeTags(raw: string | null | undefined): string[] {
+  if (raw == null || !String(raw).trim()) return [];
+  return String(raw)
+    .split(";")
+    .map((x) => x.trim())
+    .filter(Boolean);
 }
 
 /** Assignment of a cleaner to a site (from CleanTrack Site Cleaners). */

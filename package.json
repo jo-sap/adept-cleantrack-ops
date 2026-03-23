@@ -12,14 +12,13 @@
     "@azure/msal-browser": "3.10.0",
     "@azure/msal-react": "2.0.12",
     "@google/genai": "1.41.0",
-    "@supabase/supabase-js": "2.39.7",
     "date-fns": "4.1.0",
     "lucide-react": "0.463.0",
     "react": "19.0.0",
     "react-dom": "19.0.0",
     "react-is": "^19.2.4",
     "recharts": "3.7.0",
-    "xlsx": "0.18.5"
+    "xlsx-js-style": "^1.2.0"
   },
   "devDependencies": {
     "@types/node": "^22.14.0",

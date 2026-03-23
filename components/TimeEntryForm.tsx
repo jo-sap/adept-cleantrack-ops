@@ -1,17 +1,25 @@
 
-import React, { useState, useMemo, useEffect, useRef } from 'react';
+import React, { useState, useMemo, useEffect, useRef, useCallback } from 'react';
 import { Site, Cleaner, TimeEntry, FortnightPeriod, AdHocJob } from '../types';
 import { format, getDay, addDays } from 'date-fns';
 import { useRole } from '../contexts/RoleContext';
 import { getDayStatus } from '../utils';
 import { getSiteRateForDate, computeBudgetedLabourCostForRange } from '../lib/budgetedLabourCost';
 import { getPublicHolidaysInRange } from '../lib/publicHolidays';
-import { Save, Zap, Building, ArrowLeft, UserPlus, TrendingUp, TrendingDown, Check, Download, FileSpreadsheet, History, Search, Loader2 } from 'lucide-react';
+import { getNoServicePeriodForDate } from '../lib/noServicePeriods';
+import { Save, Zap, Building, ArrowLeft, UserPlus, TrendingUp, TrendingDown, Check, Download, FileSpreadsheet, Search, Loader2, Eraser, Copy } from 'lucide-react';
 import { exportFortnightTimesheets } from '../services/exportService';
-import { supabase } from '../lib/supabase';
 import { getGraphAccessToken } from '../lib/graph';
 import { getAdHocJobs } from '../repositories/adHocJobsRepo';
+import {
+  listAllTimesheetPeriodNotes,
+  upsertTimesheetPeriodNote,
+  pickSiteNoteForPeriod,
+  buildSiteNotesExportLookup,
+  type SiteNotesExportLookup,
+} from '../repositories/timesheetNotesRepo';
 import { generateAdHocOccurrencesForRange, occurrencesToHoursByDate } from '../lib/adhocSchedule';
+import TimesheetPeriodNotesPanel from './TimesheetPeriodNotesPanel';
 
 interface TimeEntryFormProps {
   sites: Site[];
@@ -35,23 +43,35 @@ function normalizeScheduleType(raw: string | undefined | null): 'once_off' | 're
 const TimeEntryForm: React.FC<TimeEntryFormProps> = ({ 
   sites, cleaners, entries, currentPeriod, onSaveBatch, onUpdateSite
 }) => {
-  const { isAdmin, profile } = useRole();
+  const { isAdmin, isManager } = useRole();
   const [activeSiteId, setActiveSiteId] = useState<string | null>(null);
   const [selectedCleanerId, setSelectedCleanerId] = useState<string>('');
   const [draftHours, setDraftHours] = useState<Record<string, number>>({});
   const [isSaved, setIsSaved] = useState(false);
   const [hasUnsavedChanges, setHasUnsavedChanges] = useState(false);
-  const [auditInfo, setAuditInfo] = useState<{name: string, time: string} | null>(null);
   const [siteSearchQuery, setSiteSearchQuery] = useState('');
   const [saveLoading, setSaveLoading] = useState(false);
   const [adhocJobId, setAdhocJobId] = useState<string | null>(null);
   const [adHocJobsForSite, setAdHocJobsForSite] = useState<AdHocJob[]>([]);
   const [queueKey, setQueueKey] = useState<QueueKey>('all');
-  
+  const [managerNoteBody, setManagerNoteBody] = useState('');
+  const [managerNoteSavedBody, setManagerNoteSavedBody] = useState('');
+  const [notesListLoading, setNotesListLoading] = useState(false);
+  const [notesListMissing, setNotesListMissing] = useState(false);
+  const [notesListSchemaError, setNotesListSchemaError] = useState<string | null>(null);
+
   const inputRefs = useRef<Record<string, HTMLInputElement | null>>({});
 
   const activeSite = sites.find(s => s.id === activeSiteId);
   const activeCleaner = cleaners.find(c => c.id === selectedCleanerId);
+
+  const managerNoteDirty = useMemo(
+    () =>
+      (isAdmin || isManager) &&
+      managerNoteBody.trim() !== managerNoteSavedBody.trim(),
+    [isAdmin, isManager, managerNoteBody, managerNoteSavedBody]
+  );
+  const canSaveAnything = hasUnsavedChanges || managerNoteDirty;
 
   const filteredSites = useMemo(() => {
     const q = siteSearchQuery.trim().toLowerCase();
@@ -69,6 +89,22 @@ const TimeEntryForm: React.FC<TimeEntryFormProps> = ({
     return list;
   }, [currentPeriod]);
 
+  const getPlannedHoursForDate = useCallback(
+    (site: Site, dateIndex: number, date: Date): number => {
+      if (getNoServicePeriodForDate(date, site.no_service_periods)) return 0;
+      const visit = String(site.visit_frequency ?? "").trim().toLowerCase();
+      // Monthly/fortnightly "period cap" mode: no per-day plan (handled elsewhere)
+      if (visit === "monthly") return 0;
+      const week2 = (site as any).daily_budgets_week2 as number[] | undefined;
+      const budgets =
+        visit === "fortnightly" && week2 && week2.length >= 7 && dateIndex >= 7
+          ? week2
+          : site.daily_budgets;
+      return budgets?.[getDay(date)] ?? 0;
+    },
+    []
+  );
+
   const siteSummaryById = useMemo(() => {
     const start = currentPeriod.startDate;
     // Use an exclusive end boundary to avoid timezone/midnight edge cases when parsing
@@ -79,7 +115,15 @@ const TimeEntryForm: React.FC<TimeEntryFormProps> = ({
       { budgetTotal: number; actualTotal: number; variance: number }
     > = {};
     sites.forEach((site) => {
-      const budgetTotal = site.budgeted_hours_per_fortnight ?? 0;
+      const isPeriodBudget =
+        site.visit_frequency === "Monthly" || site.visit_frequency === "Fortnightly";
+      const periodCap = site.budgeted_hours_per_fortnight ?? 0;
+      const dailyPlanSum = dates.reduce(
+        (s, d, idx) => s + getPlannedHoursForDate(site, idx, d),
+        0
+      );
+      const usePeriodCap = isPeriodBudget && periodCap > 0 && dailyPlanSum === 0;
+      const budgetTotal = usePeriodCap ? periodCap : dailyPlanSum;
       let actualTotal = 0;
       entries.forEach((e) => {
         if (e.siteId !== site.id) return;
@@ -94,7 +138,7 @@ const TimeEntryForm: React.FC<TimeEntryFormProps> = ({
       map[site.id] = { budgetTotal, actualTotal, variance };
     });
     return map;
-  }, [sites, entries, currentPeriod]);
+  }, [sites, entries, currentPeriod, dates, getPlannedHoursForDate]);
 
   const phInPeriod = useMemo(
     () => getPublicHolidaysInRange(currentPeriod.startDate, currentPeriod.endDate),
@@ -140,23 +184,36 @@ const TimeEntryForm: React.FC<TimeEntryFormProps> = ({
       const saturdayRate = site.budget_saturday_labour_rate ?? weekdayRate;
       const sundayRate = site.budget_sunday_labour_rate ?? weekdayRate;
       const phRate = site.budget_ph_labour_rate ?? weekdayRate;
-      const dailyBudgets = (site.daily_budgets?.length ?? 0) >= 7
-        ? site.daily_budgets
-        : [0, 0, 0, 0, 0, 0, 0];
-      const cost = computeBudgetedLabourCostForRange({
-        startDate: currentPeriod.startDate,
-        endDate: currentPeriod.endDate,
-        dailyBudgets,
-        weekdayRate,
-        saturdayRate,
-        sundayRate,
-        phRate,
-        publicHolidayDates: phInPeriod,
-      });
+      const visit = String(site.visit_frequency ?? "").trim().toLowerCase();
+      // For Fortnightly schedules with Week 2 budgets, compute expected cost per date so week2 is respected.
+      // Otherwise keep the existing 7-day budget calculation.
+      let cost = 0;
+      if (visit === "fortnightly" && (site as any).daily_budgets_week2) {
+        dates.forEach((d, idx) => {
+          const planned = getPlannedHoursForDate(site, idx, d);
+          if (planned <= 0) return;
+          const rate = getSiteRateForDate(d, weekdayRate, saturdayRate, sundayRate, phRate, phInPeriod);
+          cost += planned * rate;
+        });
+      } else {
+        const dailyBudgets = (site.daily_budgets?.length ?? 0) >= 7
+          ? site.daily_budgets
+          : [0, 0, 0, 0, 0, 0, 0];
+        cost = computeBudgetedLabourCostForRange({
+          startDate: currentPeriod.startDate,
+          endDate: currentPeriod.endDate,
+          dailyBudgets,
+          weekdayRate,
+          saturdayRate,
+          sundayRate,
+          phRate,
+          publicHolidayDates: phInPeriod,
+        });
+      }
       map[site.id] = cost;
     });
     return map;
-  }, [sites, currentPeriod, phInPeriod]);
+  }, [sites, currentPeriod, phInPeriod, dates, getPlannedHoursForDate]);
 
   const totalEstimatedBudget = useMemo(() => {
     return filteredSites.reduce(
@@ -294,7 +351,6 @@ const TimeEntryForm: React.FC<TimeEntryFormProps> = ({
     });
     setDraftHours(newDraft);
     setHasUnsavedChanges(false);
-    fetchAuditTrail();
   }, [activeSiteId, selectedCleanerId, adhocJobId, currentPeriod.id, entries, dates]);
 
   useEffect(() => {
@@ -324,43 +380,126 @@ const TimeEntryForm: React.FC<TimeEntryFormProps> = ({
     return () => { cancelled = true; };
   }, [activeSiteId, currentPeriod.startDate.getTime(), currentPeriod.endDate.getTime()]);
 
-  const fetchAuditTrail = async () => {
-    const { data } = await supabase.from('timesheet_batches').select('updated_at, profiles(full_name)')
-      .match({ 
-        site_id: activeSiteId, 
-        cleaner_id: selectedCleanerId, 
-        fortnight_start: format(currentPeriod.startDate, 'yyyy-MM-dd')
-      }).single();
-    if (data) setAuditInfo({ name: (data as any).profiles.full_name, time: format(new Date(data.updated_at), 'MMM d, h:mma') });
-    else setAuditInfo(null);
-  };
+  useEffect(() => {
+    if (!(isAdmin || isManager) || !activeSiteId || !activeSite) {
+      setManagerNoteBody("");
+      setManagerNoteSavedBody("");
+      setNotesListMissing(false);
+      setNotesListSchemaError(null);
+      setNotesListLoading(false);
+      return;
+    }
+    let cancelled = false;
+    setNotesListLoading(true);
+    getGraphAccessToken().then(async (token) => {
+      if (!token || cancelled) {
+        if (!cancelled) setNotesListLoading(false);
+        return;
+      }
+      try {
+        const { notes, listExists, listSchemaError: schemaErr } =
+          await listAllTimesheetPeriodNotes(token);
+        if (cancelled) return;
+        const periodYmd = format(currentPeriod.startDate, "yyyy-MM-dd");
+        const picked = pickSiteNoteForPeriod(notes, activeSiteId, periodYmd, activeSite?.name);
+        const body = picked?.noteBody ?? "";
+        setManagerNoteBody(body);
+        setManagerNoteSavedBody(body);
+        setNotesListMissing(!listExists);
+        setNotesListSchemaError(schemaErr ?? null);
+      } catch {
+        if (!cancelled) {
+          setNotesListMissing(true);
+          setNotesListSchemaError(null);
+        }
+      } finally {
+        if (!cancelled) setNotesListLoading(false);
+      }
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [isAdmin, isManager, activeSiteId, activeSite, currentPeriod.id, currentPeriod.startDate]);
 
   const handleHourChange = (dateStr: string, val: string) => {
-    const hours = val === '' ? 0 : Math.round(parseFloat(val) * 10) / 10;
+    // Allow quarter‑hour (and other 2‑decimal) precision like 4.75
+    const hours = val === '' ? 0 : Math.round(parseFloat(val) * 100) / 100;
     setDraftHours(prev => ({ ...prev, [dateStr]: hours }));
     setHasUnsavedChanges(true);
   };
 
   const handleSave = async () => {
     if (!activeSiteId || !selectedCleanerId || !activeCleaner || !activeSite) return;
+    if (!hasUnsavedChanges && !managerNoteDirty) return;
+    const hoursWereDirty = hasUnsavedChanges;
     setSaveLoading(true);
     try {
-      const batchData = (Object.entries(draftHours) as [string, number][]).map(([date, hours]) => ({
-        siteId: activeSiteId,
-        cleanerId: selectedCleanerId,
-        date,
-        hours,
-        pay_rate_snapshot: activeSite.cleaner_rates[selectedCleanerId] || activeCleaner.payRatePerHour || 0,
-        adhocJobId: adhocJobId || undefined
-      }));
-      await onSaveBatch(batchData as any);
-      setHasUnsavedChanges(false);
-      setIsSaved(true);
-      await fetchAuditTrail();
-      setTimeout(() => setIsSaved(false), 2000);
+      let anySuccess = false;
+      if (hoursWereDirty) {
+        const batchData = (Object.entries(draftHours) as [string, number][]).map(([date, hours]) => ({
+          siteId: activeSiteId,
+          cleanerId: selectedCleanerId,
+          date,
+          hours,
+          pay_rate_snapshot: activeSite.cleaner_rates[selectedCleanerId] || activeCleaner.payRatePerHour || 0,
+          adhocJobId: adhocJobId || undefined
+        }));
+        await onSaveBatch(batchData as any);
+        setHasUnsavedChanges(false);
+        anySuccess = true;
+      }
+
+      const canPersistNote =
+        (isAdmin || isManager) && !notesListMissing && !notesListSchemaError;
+      if (canPersistNote && managerNoteDirty) {
+        const token = await getGraphAccessToken();
+        if (!token) {
+          alert("Sign in with Microsoft to save the manager note.");
+        } else {
+          const periodYmd = format(currentPeriod.startDate, "yyyy-MM-dd");
+          const noteResult = await upsertTimesheetPeriodNote(token, {
+            siteId: activeSiteId,
+            siteName: activeSite.name ?? "",
+            periodStartYmd: periodYmd,
+            cleanerId: null,
+            tags: [],
+            noteBody: managerNoteBody,
+          });
+          if (!noteResult.ok) {
+            alert(
+              hoursWereDirty
+                ? `Timesheet saved, but the manager note failed: ${noteResult.error}`
+                : noteResult.error
+            );
+          } else {
+            setManagerNoteSavedBody(managerNoteBody.trim());
+            anySuccess = true;
+          }
+        }
+      }
+
+      if (anySuccess) {
+        setIsSaved(true);
+        setTimeout(() => setIsSaved(false), 2000);
+      }
     } finally {
       setSaveLoading(false);
     }
+  };
+
+  const handleClearAll = () => {
+    if (!activeSiteId || !selectedCleanerId) return;
+    const label = adhocJobId ? "this Ad Hoc job" : "contract / standard work";
+    const ok = window.confirm(
+      `Clear all hours for ${label} in this fortnight? This will set all 14 days to 0.0 hours (not saved until you click Save).`
+    );
+    if (!ok) return;
+    const next: Record<string, number> = {};
+    dates.forEach((d) => {
+      next[format(d, "yyyy-MM-dd")] = 0;
+    });
+    setDraftHours(next);
+    setHasUnsavedChanges(true);
   };
 
   const handleAutoFill = () => {
@@ -373,10 +512,10 @@ const TimeEntryForm: React.FC<TimeEntryFormProps> = ({
 
     const next: Record<string, number> = { ...draftHours };
     let changed = false;
-    dates.forEach(date => {
+    dates.forEach((date, idx) => {
       const dateStr = format(date, "yyyy-MM-dd");
       const current = next[dateStr] ?? 0;
-      const sitePlan = activeSite.daily_budgets[getDay(date)] ?? 0;
+      const sitePlan = getPlannedHoursForDate(activeSite, idx, date);
       // Remaining plan for this cleaner = site plan minus other cleaners' hours (same as "Plan" on the card)
       const dayAssignments = siteEntriesByDate[dateStr] || {};
       const otherHours = Object.entries(dayAssignments)
@@ -408,6 +547,42 @@ const TimeEntryForm: React.FC<TimeEntryFormProps> = ({
       setDraftHours(next);
       setHasUnsavedChanges(true);
     }
+  };
+
+  /** Map each day in the current grid to the same calendar position in the prior pay fortnight (site + selected cleaner + contract vs ad hoc). */
+  const handleCopyPreviousFortnight = () => {
+    if (!activeSiteId || !selectedCleanerId) return;
+    const matchesContext = (e: TimeEntry) =>
+      e.siteId === activeSiteId &&
+      e.cleanerId === selectedCleanerId &&
+      (adhocJobId ? e.adhocJobId === adhocJobId : !e.adhocJobId);
+
+    const prevDateStrs = dates.map((d) => format(addDays(d, -14), "yyyy-MM-dd"));
+    const hasAnyPriorSaved = prevDateStrs.some((prevStr) =>
+      entries.some((e) => e.date === prevStr && matchesContext(e))
+    );
+    if (!hasAnyPriorSaved) {
+      window.alert(
+        "No saved timesheet found in the previous fortnight for this site, cleaner, and job type."
+      );
+      return;
+    }
+    const ok = window.confirm(
+      "Replace all 14 days in this view with hours from the previous fortnight for this cleaner? Unsaved changes will be overwritten. Click Save to persist."
+    );
+    if (!ok) return;
+
+    const next: Record<string, number> = {};
+    dates.forEach((date) => {
+      const curStr = format(date, "yyyy-MM-dd");
+      const prevStr = format(addDays(date, -14), "yyyy-MM-dd");
+      const hours = entries
+        .filter((e) => e.date === prevStr && matchesContext(e))
+        .reduce((s, e) => s + e.hours, 0);
+      next[curStr] = hours;
+    });
+    setDraftHours(next);
+    setHasUnsavedChanges(true);
   };
 
   const summary = useMemo(() => {
@@ -459,13 +634,13 @@ const TimeEntryForm: React.FC<TimeEntryFormProps> = ({
       activeSite.visit_frequency === "Monthly" || activeSite.visit_frequency === "Fortnightly";
     const periodCap = activeSite.budgeted_hours_per_fortnight ?? 0;
     const dailyPlanSum = dates.reduce(
-      (s, d) => s + (activeSite.daily_budgets[getDay(d)] || 0),
+      (s, d, idx) => s + getPlannedHoursForDate(activeSite, idx, d),
       0
     );
     const usePeriodCap = isPeriodBudget && periodCap > 0 && dailyPlanSum === 0;
     const budgetTotal = usePeriodCap
       ? periodCap
-      : dates.reduce((s, date) => s + (activeSite.daily_budgets[getDay(date)] || 0), 0);
+      : dates.reduce((s, date, idx) => s + getPlannedHoursForDate(activeSite, idx, date), 0);
 
     let siteActualTotal = 0;
     let cleanerActualTotal = 0;
@@ -480,9 +655,9 @@ const TimeEntryForm: React.FC<TimeEntryFormProps> = ({
     const phRate = activeSite.budget_ph_labour_rate ?? weekdayRate;
     const phInPeriod = getPublicHolidaysInRange(currentPeriod.startDate, currentPeriod.endDate);
 
-    dates.forEach((date) => {
+    dates.forEach((date, idx) => {
       const dateStr = format(date, "yyyy-MM-dd");
-      const sitePlanForDay = activeSite.daily_budgets[getDay(date)] || 0;
+      const sitePlanForDay = getPlannedHoursForDate(activeSite, idx, date);
       const dayAssignments = entriesByDate[dateStr] || {};
       const existingForCleaner = dayAssignments[selectedCleanerId] || 0;
       const existingDayTotal = Object.values(dayAssignments).reduce(
@@ -553,15 +728,7 @@ const TimeEntryForm: React.FC<TimeEntryFormProps> = ({
                </div>
             </div>
           </div>
-          {auditInfo && (
-            <div className="bg-gray-50 px-4 py-2 rounded-xl border border-gray-200 flex items-center gap-2">
-              <History size={14} className="text-gray-400" />
-              <div className="text-right">
-                <p className="text-[9px] font-bold text-gray-400 uppercase leading-none mb-1">Last Edited</p>
-                <p className="text-[10px] font-bold text-gray-700 leading-none">{auditInfo.name} • {auditInfo.time}</p>
-              </div>
-            </div>
-          )}
+          {/* Supabase-based "Last Edited" audit removed (SharePoint-only). */}
         </div>
 
         {(() => {
@@ -722,8 +889,30 @@ const TimeEntryForm: React.FC<TimeEntryFormProps> = ({
                   </button>
                 )}
                 <button
+                  type="button"
+                  onClick={handleCopyPreviousFortnight}
+                  disabled={saveLoading}
+                  className="flex flex-col items-center justify-center w-24 h-14 rounded-xl border border-[#edeef0] bg-white text-gray-700 hover:bg-gray-50 hover:border-gray-300 transition-all disabled:opacity-40"
+                  title="Copy saved hours from the previous pay fortnight for this site and cleaner (same job type). Save to persist."
+                >
+                  <Copy size={12} className="opacity-70 mb-0.5" />
+                  <span className="text-[10px] font-bold uppercase leading-tight text-center px-0.5">
+                    Last FN
+                  </span>
+                </button>
+                <button
+                  type="button"
+                  onClick={handleClearAll}
+                  disabled={saveLoading}
+                  className="flex flex-col items-center justify-center w-24 h-14 rounded-xl border border-[#edeef0] bg-white text-gray-700 hover:bg-gray-50 hover:border-gray-300 transition-all disabled:opacity-40"
+                  title="Clear all hours for this fortnight (not saved until Save)"
+                >
+                  <Eraser size={12} className="opacity-70 mb-0.5" />
+                  <span className="text-[10px] font-bold uppercase">Clear</span>
+                </button>
+                <button
                   onClick={handleSave}
-                  disabled={!hasUnsavedChanges || saveLoading}
+                  disabled={!canSaveAnything || saveLoading}
                   className={`flex flex-col items-center justify-center w-24 h-14 rounded-xl transition-all ${
                     isSaved
                       ? 'bg-green-600 text-white'
@@ -731,7 +920,7 @@ const TimeEntryForm: React.FC<TimeEntryFormProps> = ({
                   }`}
                 >
                   {saveLoading ? <Loader2 size={18} className="animate-spin mb-0.5" /> : <Save size={12} className="opacity-70 mb-0.5" />}
-                  <span className="text-[10px] font-bold uppercase">{saveLoading ? 'Saving…' : 'Save Batch'}</span>
+                  <span className="text-[10px] font-bold uppercase">{saveLoading ? 'Saving…' : 'Save'}</span>
                 </button>
               </div>
             </div>
@@ -744,8 +933,11 @@ const TimeEntryForm: React.FC<TimeEntryFormProps> = ({
               {dates.map((date, index) => {
                 const dateStr = format(date, 'yyyy-MM-dd');
                 const isAdHoc = !!adhocJobId;
+                const noServicePeriod = isAdHoc
+                  ? undefined
+                  : getNoServicePeriodForDate(date, activeSite.no_service_periods);
                 const dayAssignments = (isAdHoc ? adHocEntriesByDate : siteEntriesByDate)[dateStr] || {};
-                const sitePlan = isAdHoc ? 0 : (activeSite.daily_budgets[getDay(date)] || 0);
+                const sitePlan = isAdHoc ? 0 : getPlannedHoursForDate(activeSite, index, date);
                 const otherHours = Object.entries(dayAssignments)
                   .filter(([cid]) => cid !== selectedCleanerId)
                   .reduce((sum, [, h]) => sum + h, 0);
@@ -754,10 +946,13 @@ const TimeEntryForm: React.FC<TimeEntryFormProps> = ({
                 const hours = draftHours[dateStr] || 0;
                 const status = isAdHoc
                   ? { border: "border-[#edeef0]", bg: "bg-gray-50", dot: "bg-gray-300", color: "text-gray-600", label: "Adhoc" }
+                  : noServicePeriod
+                    ? { border: "border-green-200", bg: "bg-green-50", dot: "bg-green-500", color: "text-green-600", label: "On target" }
                   : getDayStatus(planned, hours);
                 const existingForThisCleaner = dayAssignments[selectedCleanerId] || 0;
                 const fullyAllocatedToOthers =
                   !isAdHoc && sitePlan > 0 && remainingPlan <= 0 && existingForThisCleaner === 0;
+                const noServiceLabel = noServicePeriod?.label?.trim() || noServicePeriod?.reason?.trim() || "No Service";
                 return (
                   <div key={dateStr} onClick={() => inputRefs.current[dateStr]?.focus()} className={`flex flex-col p-3 bg-white border rounded-xl cursor-pointer group relative overflow-hidden ${status.border} ${status.bg.replace('bg-', 'hover:bg-')}`}>
                     <div className={`absolute top-2 right-2 w-1.5 h-1.5 rounded-full ${status.dot}`} />
@@ -767,18 +962,34 @@ const TimeEntryForm: React.FC<TimeEntryFormProps> = ({
                       <input
                         ref={el => inputRefs.current[dateStr] = el}
                         type="number"
-                        step="0.1"
+                        step="0.01"
                         value={draftHours[dateStr] || ''}
                         onChange={e => handleHourChange(dateStr, e.target.value)}
                         className="w-full px-2.5 py-2 text-center text-sm font-semibold bg-white border border-gray-300 rounded-lg focus:ring-2 focus:ring-gray-900/15 focus:border-gray-900 shadow-[inset_0_0_0_1px_rgba(15,23,42,0.02)] placeholder-gray-400 disabled:opacity-40 disabled:cursor-not-allowed"
                         disabled={fullyAllocatedToOthers}
                       />
+                      {noServicePeriod && (
+                        <div className="text-center text-[8px] font-bold uppercase text-gray-500">
+                          {noServiceLabel}
+                        </div>
+                      )}
                       <div className={`mt-1 text-center py-0.5 rounded-full text-[8px] font-black uppercase ${status.bg} ${status.color} border ${status.border}`}>{status.label}</div>
                     </div>
                   </div>
                 );
               })}
             </div>
+            {(isAdmin || isManager) && (
+              <TimesheetPeriodNotesPanel
+                currentPeriod={currentPeriod}
+                canEdit={isAdmin || isManager}
+                noteBody={managerNoteBody}
+                onNoteChange={setManagerNoteBody}
+                notesLoading={notesListLoading}
+                listMissing={notesListMissing}
+                listSchemaError={notesListSchemaError}
+              />
+            )}
           </div>
         ) : <div className="py-20 text-center border-dashed border-2 border-gray-100 rounded-2xl text-gray-400 text-xs">Select personnel to audit.</div>}
       </div>
@@ -795,15 +1006,33 @@ const TimeEntryForm: React.FC<TimeEntryFormProps> = ({
         </div>
         <div className="flex gap-2 flex-shrink-0">
           <button
-            onClick={() =>
-              exportFortnightTimesheets(
-                currentPeriod,
-                sites,
-                cleaners,
-                entries as any,
-                'xlsx'
-              )
-            }
+            type="button"
+            onClick={async () => {
+              try {
+                const periodYmd = format(currentPeriod.startDate, 'yyyy-MM-dd');
+                let siteNotesLookup: SiteNotesExportLookup | undefined;
+                const token = await getGraphAccessToken();
+                if (token) {
+                  try {
+                    const { notes } = await listAllTimesheetPeriodNotes(token);
+                    siteNotesLookup = buildSiteNotesExportLookup(notes, periodYmd);
+                  } catch {
+                    /* export without notes if list unavailable */
+                  }
+                }
+                exportFortnightTimesheets(
+                  currentPeriod,
+                  sites,
+                  cleaners,
+                  entries as any,
+                  'xlsx',
+                  siteNotesLookup
+                );
+              } catch (e) {
+                console.error('Export (XLSX) failed', e);
+                alert(e instanceof Error ? e.message : 'Export failed. Check the browser console.');
+              }
+            }}
             className="flex items-center gap-1.5 px-4 py-2 so-btn-secondary text-xs font-semibold"
           >
             <FileSpreadsheet size={14} />

@@ -36,6 +36,7 @@ function toAppCleaner(c: CleanerItem): Cleaner {
     bankBsb: c.bsb,
     bankAccountNumber: c.accountNumber,
     payRatePerHour: c.payRatePerHour,
+    type: c.type ?? "cleaner",
   };
 }
 
@@ -47,6 +48,7 @@ interface CleanerManagerProps {
 interface BulkCleanerRow {
   id: string;
   cleanerName: string;
+  type: "cleaner" | "contractor";
   payRatePerHour: number | "";
   accountName: string;
   bsb: string;
@@ -69,6 +71,7 @@ const CleanerManager: React.FC<CleanerManagerProps> = ({ onCleanersRefresh }) =>
   const [editingCleaner, setEditingCleaner] = useState<CleanerItem | null>(null);
   const [formData, setFormData] = useState<CleanerPayload>({
     cleanerName: "",
+    type: "cleaner",
     payRatePerHour: 25,
     accountName: "",
     bsb: "",
@@ -98,6 +101,7 @@ const CleanerManager: React.FC<CleanerManagerProps> = ({ onCleanersRefresh }) =>
 
   type CleanerSortKey = "name" | "status" | "rate";
   const [cleanerSortBy, setCleanerSortBy] = useState<CleanerSortKey>("name");
+  const [workerTypeFilter, setWorkerTypeFilter] = useState<"all" | "cleaner" | "contractor">("all");
 
   /** Resolve site display name from assignment (lookup) or fallback join to CleanTrack Sites. */
   const resolveSiteDisplayName = useCallback(
@@ -183,6 +187,7 @@ const CleanerManager: React.FC<CleanerManagerProps> = ({ onCleanersRefresh }) =>
     setEditingCleaner(null);
     setFormData({
       cleanerName: "",
+      type: "cleaner",
       payRatePerHour: 25,
       accountName: "",
       bsb: "",
@@ -198,6 +203,7 @@ const CleanerManager: React.FC<CleanerManagerProps> = ({ onCleanersRefresh }) =>
       {
         id: crypto.randomUUID(),
         cleanerName: "",
+        type: "cleaner",
         payRatePerHour: 25,
         accountName: "",
         bsb: "",
@@ -217,6 +223,7 @@ const CleanerManager: React.FC<CleanerManagerProps> = ({ onCleanersRefresh }) =>
       {
         id: crypto.randomUUID(),
         cleanerName: "",
+        type: "cleaner",
         payRatePerHour: 25,
         accountName: "",
         bsb: "",
@@ -246,6 +253,7 @@ const CleanerManager: React.FC<CleanerManagerProps> = ({ onCleanersRefresh }) =>
       for (const row of rowsToCreate) {
         await createCleaner(token, {
           cleanerName: row.cleanerName.trim(),
+          type: row.type ?? "cleaner",
           payRatePerHour: row.payRatePerHour === "" ? 25 : (row.payRatePerHour ?? 25),
           accountName: row.accountName?.trim() ?? "",
           bsb: row.bsb?.trim() ?? "",
@@ -270,6 +278,7 @@ const CleanerManager: React.FC<CleanerManagerProps> = ({ onCleanersRefresh }) =>
     setIsAdding(false);
     setFormData({
       cleanerName: cleaner.cleanerName,
+      type: cleaner.type ?? "cleaner",
       payRatePerHour: cleaner.payRatePerHour ?? 25,
       accountName: cleaner.accountName ?? "",
       bsb: cleaner.bsb ?? "",
@@ -283,6 +292,7 @@ const CleanerManager: React.FC<CleanerManagerProps> = ({ onCleanersRefresh }) =>
     setEditingCleaner(null);
     setFormData({
       cleanerName: "",
+      type: "cleaner",
       payRatePerHour: 25,
       accountName: "",
       bsb: "",
@@ -308,6 +318,7 @@ const CleanerManager: React.FC<CleanerManagerProps> = ({ onCleanersRefresh }) =>
       if (editingCleaner) {
         await updateCleaner(token, editingCleaner.id, {
           cleanerName: formData.cleanerName.trim(),
+          type: formData.type ?? "cleaner",
           payRatePerHour: formData.payRatePerHour ?? 25,
           accountName: formData.accountName?.trim() ?? "",
           bsb: formData.bsb?.trim() ?? "",
@@ -319,6 +330,7 @@ const CleanerManager: React.FC<CleanerManagerProps> = ({ onCleanersRefresh }) =>
       } else {
         await createCleaner(token, {
           cleanerName: formData.cleanerName.trim(),
+          type: formData.type ?? "cleaner",
           payRatePerHour: formData.payRatePerHour ?? 25,
           accountName: formData.accountName?.trim() ?? "",
           bsb: formData.bsb?.trim() ?? "",
@@ -381,9 +393,12 @@ const CleanerManager: React.FC<CleanerManagerProps> = ({ onCleanersRefresh }) =>
     }
   };
 
-  const filteredCleaners = cleaners.filter((c) =>
-    c.cleanerName.toLowerCase().includes(searchQuery.toLowerCase().trim())
-  );
+  const filteredCleaners = cleaners.filter((c) => {
+    const nameMatch = c.cleanerName.toLowerCase().includes(searchQuery.toLowerCase().trim());
+    if (!nameMatch) return false;
+    const t = c.type ?? "cleaner";
+    return workerTypeFilter === "all" ? true : t === workerTypeFilter;
+  });
 
   const sortedCleaners = useMemo(() => {
     const list = [...filteredCleaners];
@@ -478,7 +493,7 @@ const CleanerManager: React.FC<CleanerManagerProps> = ({ onCleanersRefresh }) =>
     <div className="space-y-6 sm:space-y-8 animate-fadeIn">
       <div className="flex flex-col sm:flex-row sm:justify-between sm:items-end gap-4 border-b border-[#edeef0] pb-4">
         <div className="min-w-0">
-          <h2 className="text-2xl sm:text-3xl font-bold text-gray-900">Cleaner Team</h2>
+          <h2 className="text-2xl sm:text-3xl font-bold text-gray-900">Workforce</h2>
           <p className="text-gray-500 text-sm mt-1">Manage personnel, onboarding details, and banking records.</p>
         </div>
         {canManageCleaners && (
@@ -493,22 +508,62 @@ const CleanerManager: React.FC<CleanerManagerProps> = ({ onCleanersRefresh }) =>
               onClick={handleOpenAdd}
               className="bg-gray-900 text-white px-4 py-2 rounded-lg text-sm font-bold hover:bg-gray-800 transition-colors flex items-center gap-2"
             >
-              <Plus size={16} /> New Cleaner
+              <Plus size={16} /> New Worker
             </button>
           </div>
         )}
       </div>
 
-      <div className="relative">
-        <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" size={18} />
-        <input
-          type="search"
-          placeholder="Search team…"
-          value={searchQuery}
-          onChange={(e) => setSearchQuery(e.target.value)}
-          className="w-full pl-10 pr-4 py-2.5 border border-[#edeef0] rounded-lg text-sm text-gray-900 placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-gray-900/10 focus:border-gray-400"
-          aria-label="Search cleaners"
-        />
+      <div className="space-y-2">
+        <div className="relative">
+          <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" size={18} />
+          <input
+            type="search"
+            placeholder="Search workforce…"
+            value={searchQuery}
+            onChange={(e) => setSearchQuery(e.target.value)}
+            className="w-full pl-10 pr-4 py-2.5 border border-[#edeef0] rounded-lg text-sm text-gray-900 placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-gray-900/10 focus:border-gray-400"
+            aria-label="Search workforce"
+          />
+        </div>
+        <div className="flex items-center gap-2">
+          <button
+            type="button"
+            onClick={() => setWorkerTypeFilter("all")}
+            className={`px-3 py-1.5 rounded-lg text-xs font-bold border ${
+              workerTypeFilter === "all"
+                ? "bg-gray-900 text-white border-gray-900"
+                : "bg-white text-gray-700 border-[#edeef0] hover:bg-gray-50"
+            }`}
+          >
+            All
+          </button>
+          <button
+            type="button"
+            onClick={() => setWorkerTypeFilter("cleaner")}
+            className={`px-3 py-1.5 rounded-lg text-xs font-bold border ${
+              workerTypeFilter === "cleaner"
+                ? "bg-gray-900 text-white border-gray-900"
+                : "bg-white text-gray-700 border-[#edeef0] hover:bg-gray-50"
+            }`}
+          >
+            Cleaners
+          </button>
+          <button
+            type="button"
+            onClick={() => setWorkerTypeFilter("contractor")}
+            className={`px-3 py-1.5 rounded-lg text-xs font-bold border ${
+              workerTypeFilter === "contractor"
+                ? "bg-gray-900 text-white border-gray-900"
+                : "bg-white text-gray-700 border-[#edeef0] hover:bg-gray-50"
+            }`}
+          >
+            Contractors
+          </button>
+          <span className="text-xs text-gray-500 ml-1">
+            Cleaners: {cleaners.filter((c) => (c.type ?? "cleaner") === "cleaner").length} · Contractors: {cleaners.filter((c) => (c.type ?? "cleaner") === "contractor").length}
+          </span>
+        </div>
       </div>
 
       {canManageCleaners && selectedCleanerIds.length > 0 && (
@@ -652,18 +707,19 @@ const CleanerManager: React.FC<CleanerManagerProps> = ({ onCleanersRefresh }) =>
         </div>
       ) : filteredCleaners.length === 0 ? (
         <div className="text-gray-500 py-8">
-          {searchQuery.trim() ? "No cleaners match your search." : "No cleaners yet. Add one to get started."}
+          {searchQuery.trim() ? "No workers match your search." : "No workers yet. Add one to get started."}
         </div>
       ) : (
         <div className="border border-[#edeef0] rounded-lg bg-white shadow-sm overflow-hidden table-scroll-mobile">
-          <table className="w-full border-collapse text-left table-fixed min-w-[760px]">
+          <table className="w-full border-collapse text-left table-fixed min-w-[820px]">
             <colgroup>
               {canManageCleaners && <col style={{ width: '4%' }} />}
               <col style={{ width: canManageCleaners ? '5%' : '6%' }} />
-              <col style={{ width: canManageCleaners ? '22%' : '26%' }} />
+              <col style={{ width: canManageCleaners ? '20%' : '22%' }} />
+              <col style={{ width: '10%' }} />
               <col style={{ width: '8%' }} />
               <col style={{ width: '8%' }} />
-              <col style={{ width: canManageCleaners ? '18%' : '22%' }} />
+              <col style={{ width: canManageCleaners ? '16%' : '18%' }} />
               <col style={{ width: '10%' }} />
               <col style={{ width: '8%' }} />
               <col style={{ width: '11%' }} />
@@ -698,6 +754,7 @@ const CleanerManager: React.FC<CleanerManagerProps> = ({ onCleanersRefresh }) =>
                       ))}
                   </button>
                 </th>
+                <th className="px-1.5 py-1.5 text-[9px] font-bold text-gray-500 uppercase tracking-widest">Type</th>
                 <th className="px-1.5 py-1.5">
                   <button
                     type="button"
@@ -769,6 +826,23 @@ const CleanerManager: React.FC<CleanerManagerProps> = ({ onCleanersRefresh }) =>
                     </td>
                     <td className="px-1.5 py-1.5">
                       <span className="text-xs font-semibold text-gray-900 break-words">{cleaner.cleanerName}</span>
+                    </td>
+                    <td className="px-1.5 py-1.5">
+                      {(() => {
+                        const type = cleaner.type ?? "cleaner";
+                        const isContractor = type === "contractor";
+                        return (
+                          <span
+                            className={`inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-bold uppercase ${
+                              isContractor
+                                ? "bg-purple-50 text-purple-700 border border-purple-200"
+                                : "bg-slate-100 text-slate-700 border border-slate-200"
+                            }`}
+                          >
+                            {isContractor ? "Contractor" : "Cleaner"}
+                          </span>
+                        );
+                      })()}
                     </td>
                     <td className="px-1.5 py-1.5">
                       <span className={`text-[10px] font-bold uppercase ${cleaner.active ? "text-green-600" : "text-gray-400"}`}>
@@ -874,7 +948,7 @@ const CleanerManager: React.FC<CleanerManagerProps> = ({ onCleanersRefresh }) =>
                 <div className="w-8 h-8 bg-gray-900 rounded-lg flex items-center justify-center text-white">
                   <UserCircle size={20} />
                 </div>
-                <h3 className="font-bold text-gray-900">{editingCleaner ? "Edit Cleaner" : "Add Cleaner"}</h3>
+                <h3 className="font-bold text-gray-900">{editingCleaner ? "Edit Worker" : "Add Worker"}</h3>
               </div>
               <button
                 onClick={() => { setIsAdding(false); handleCloseEdit(); }}
@@ -887,7 +961,7 @@ const CleanerManager: React.FC<CleanerManagerProps> = ({ onCleanersRefresh }) =>
             <form onSubmit={handleSubmit} className="p-8 space-y-6">
               <div className="space-y-1">
                 <label className="text-[10px] font-bold text-gray-400 uppercase tracking-widest">
-                  Cleaner Name <span className="text-red-500">*</span>
+                  Worker Name <span className="text-red-500">*</span>
                 </label>
                 <input
                   required
@@ -897,6 +971,26 @@ const CleanerManager: React.FC<CleanerManagerProps> = ({ onCleanersRefresh }) =>
                   className="w-full px-3 py-2 border border-[#edeef0] rounded-md text-sm outline-none focus:ring-1 focus:ring-gray-900"
                   placeholder="Full name"
                 />
+              </div>
+
+              <div className="space-y-1">
+                <label className="text-[10px] font-bold text-gray-400 uppercase tracking-widest">
+                  Worker Type <span className="text-red-500">*</span>
+                </label>
+                <select
+                  required
+                  value={formData.type ?? "cleaner"}
+                  onChange={(e) =>
+                    setFormData({
+                      ...formData,
+                      type: (e.target.value === "contractor" ? "contractor" : "cleaner"),
+                    })
+                  }
+                  className="w-full px-3 py-2 border border-[#edeef0] rounded-md text-sm outline-none focus:ring-1 focus:ring-gray-900"
+                >
+                  <option value="cleaner">Cleaner</option>
+                  <option value="contractor">Contractor</option>
+                </select>
               </div>
 
               <div className="space-y-1">
@@ -976,7 +1070,7 @@ const CleanerManager: React.FC<CleanerManagerProps> = ({ onCleanersRefresh }) =>
                 className="w-full bg-gray-900 text-white py-3 rounded-xl font-bold hover:bg-gray-800 transition-all shadow-lg active:scale-[0.98] disabled:opacity-50 flex items-center justify-center gap-2"
               >
                 {submitLoading && <Loader2 className="animate-spin" size={18} />}
-                {editingCleaner ? "Save changes" : "Add Cleaner"}
+                {editingCleaner ? "Save changes" : "Add Worker"}
               </button>
             </form>
           </div>
@@ -991,7 +1085,7 @@ const CleanerManager: React.FC<CleanerManagerProps> = ({ onCleanersRefresh }) =>
                 <div className="w-8 h-8 bg-gray-900 rounded-lg flex items-center justify-center text-white">
                   <Layers size={20} />
                 </div>
-                <h3 className="font-bold text-gray-900">Bulk Add Cleaners</h3>
+                <h3 className="font-bold text-gray-900">Bulk Add Workers</h3>
               </div>
               <button
                 onClick={() => !bulkSubmitLoading && setBulkModalOpen(false)}
@@ -1004,14 +1098,14 @@ const CleanerManager: React.FC<CleanerManagerProps> = ({ onCleanersRefresh }) =>
 
             <div className="p-6 space-y-4">
               <p className="text-xs text-gray-500">
-                Enter multiple cleaners at once. Only rows with a name will be created.
+                Enter multiple workers at once. Only rows with a name will be created.
               </p>
               <div className="border border-[#edeef0] rounded-lg overflow-x-auto">
                 <table className="w-full text-left text-sm">
                   <thead>
                     <tr className="bg-gray-50 border-b border-[#edeef0] text-[10px] font-bold text-gray-500 uppercase tracking-widest">
                       <th className="py-2 px-2 w-6"></th>
-                      <th className="py-2 px-2 min-w-[140px]">Cleaner Name</th>
+                      <th className="py-2 px-2 min-w-[140px]">Worker Name</th>
                       <th className="py-2 px-2 w-24">Rate ($/hr)</th>
                       <th className="py-2 px-2 min-w-[160px]">Account name</th>
                       <th className="py-2 px-2 w-24">BSB</th>
@@ -1123,7 +1217,7 @@ const CleanerManager: React.FC<CleanerManagerProps> = ({ onCleanersRefresh }) =>
                   className="bg-gray-900 text-white px-6 py-2.5 rounded-lg text-sm font-bold hover:bg-gray-800 disabled:opacity-50 flex items-center gap-2"
                 >
                   {bulkSubmitLoading && <Loader2 className="animate-spin" size={14} />}
-                  Add {bulkRows.filter((r) => r.cleanerName.trim() !== "").length} cleaners
+                  Add {bulkRows.filter((r) => r.cleanerName.trim() !== "").length} workers
                 </button>
               </div>
             </div>

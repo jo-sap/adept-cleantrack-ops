@@ -1,7 +1,6 @@
 import React from "react";
 import { useAppAuth } from "../contexts/AppAuthContext";
 import { DEV_SHOW_LEGACY_LOGIN } from "../config/authFlags";
-import Login from "./Login";
 
 /** Microsoft logo (4 quadrants) for the sign-in button */
 const MicrosoftLogo: React.FC<{ className?: string }> = ({ className }) => (
@@ -15,11 +14,7 @@ const MicrosoftLogo: React.FC<{ className?: string }> = ({ className }) => (
 
 const SignInScreen: React.FC = () => {
   const { signInWithMicrosoft, isMicrosoftAuthConfigured } = useAppAuth();
-  const [showLegacy, setShowLegacy] = React.useState(false);
-
-  if (DEV_SHOW_LEGACY_LOGIN && showLegacy) {
-    return <Login />;
-  }
+  // Legacy Supabase login has been removed (SharePoint-only).
 
   return (
     <div className="min-h-screen flex bg-[#F6F7F8]">
@@ -28,15 +23,19 @@ const SignInScreen: React.FC = () => {
         <div className="flex-1 flex flex-col justify-center items-center">
           <div className="w-full max-w-sm">
             <div className="flex items-center gap-3 mb-10">
-              <div className="w-9 h-9 rounded-xl bg-[#111827] flex items-center justify-center text-white font-semibold text-lg shadow-sm">
-                CT
+              <div className="w-9 h-9 rounded-xl bg-white p-1.5 shadow-sm">
+                <img
+                  src="/images/a_adept.png"
+                  alt="Adept Timesheet Ops logo"
+                  className="w-full h-full object-contain"
+                />
               </div>
               <div className="flex flex-col">
                 <span className="text-[18px] font-semibold text-gray-900">
-                  CleanTrack Ops
+                  Adept Timesheet Ops
                 </span>
                 <span className="text-[13px] text-gray-500">
-                  Slate Ops · Operational control centre
+                  Operational control centre
                 </span>
               </div>
             </div>
@@ -66,13 +65,9 @@ const SignInScreen: React.FC = () => {
             )}
 
           {DEV_SHOW_LEGACY_LOGIN && (
-            <button
-              type="button"
-              onClick={() => setShowLegacy(true)}
-              className="mt-4 text-xs text-gray-500 hover:text-gray-700"
-            >
-              Use email / password (legacy)
-            </button>
+            <p className="mt-4 text-xs text-gray-500">
+              Legacy email/password login has been removed.
+            </p>
           )}
           </div>
         </div>
@@ -82,7 +77,7 @@ const SignInScreen: React.FC = () => {
         </p>
       </div>
 
-      {/* Right: brand panel — Slate Ops motif */}
+      {/* Right: brand panel */}
       <div className="hidden lg:flex flex-1 relative bg-[#111827] overflow-hidden">
         <div className="absolute inset-0 opacity-[0.65]" aria-hidden>
           <div

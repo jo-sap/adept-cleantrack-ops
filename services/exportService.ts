@@ -5,13 +5,52 @@ import * as sharepoint from '../lib/sharepoint';
 import { normalizeSiteLabelForNotes } from '../lib/siteNotesLabel';
 import type { SiteNotesExportLookup } from '../repositories/timesheetNotesRepo';
 
-function managerNoteForSite(site: Site, lookup?: SiteNotesExportLookup): string {
-  if (!lookup) return '';
-  const sid = sharepoint.normalizeListItemId(site.id);
-  const byId = lookup.bySiteId[sid]?.trim();
-  if (byId) return byId;
-  const nm = normalizeSiteLabelForNotes(site.name);
-  return (nm ? lookup.bySiteNameLower[nm] : '')?.trim() ?? '';
+function managerNoteForExport(
+  lookup: SiteNotesExportLookup | undefined,
+  site?: Site,
+  siteName?: string,
+  adHocJobIds: string[] = [],
+  adHocJobNames: string[] = []
+): string {
+  if (!lookup) return "";
+  const sid = site ? sharepoint.normalizeListItemId(site.id) : "";
+  const byId = sid ? lookup.bySiteId[sid]?.trim() || "" : "";
+  const normalizedName = normalizeSiteLabelForNotes(siteName || site?.name || "");
+  const byName = normalizedName ? lookup.bySiteNameLower[normalizedName]?.trim() || "" : "";
+  let fuzzySiteNote = "";
+  if (!byId && !byName && normalizedName) {
+    // Handle label drift like "Blackwoods" vs "Blackwoods Macquarie Park".
+    const fuzzy = Object.entries(lookup.bySiteNameLower).find(([k]) =>
+      k.includes(normalizedName) || normalizedName.includes(k)
+    );
+    fuzzySiteNote = fuzzy?.[1]?.trim() || "";
+  }
+  const siteNote = byId || byName || fuzzySiteNote;
+  const adHocNotes = adHocJobIds
+    .map((id) => {
+      const tag = `adhocjob:${String(id).trim().toLowerCase()}`;
+      return lookup.byAdhocTag[tag]?.trim() || "";
+    })
+    .filter((v, idx, arr) => !!v && arr.indexOf(v) === idx);
+  const adHocNameNotes = adHocJobNames
+    .map((name) => {
+      const key = normalizeSiteLabelForNotes(name);
+      if (!key) return "";
+      const exact = lookup.bySiteNameLower[key]?.trim() || "";
+      if (exact) return exact;
+      const fuzzy = Object.entries(lookup.bySiteNameLower).find(([k]) =>
+        k.includes(key) || key.includes(k)
+      );
+      return fuzzy?.[1]?.trim() || "";
+    })
+    .filter((v, idx, arr) => !!v && arr.indexOf(v) === idx);
+  const allAdHocNotes = [...adHocNotes, ...adHocNameNotes].filter(
+    (v, idx, arr) => !!v && arr.indexOf(v) === idx
+  );
+  const finalNotes = [siteNote, ...allAdHocNotes].filter(
+    (v, idx, arr) => !!v && arr.indexOf(v) === idx
+  );
+  return finalNotes.join(" | ");
 }
 
 /** Light yellow fill for cells with a manager note (Excel RGB without #). */
@@ -227,6 +266,7 @@ export const exportFortnightTimesheets = (
     let adHocHours = 0;
     let totalPayment = 0;
     const adHocJobNames = new Set<string>();
+    const adHocJobIdsForRow = new Set<string>();
 
     dates.forEach((date) => {
       const dateStr = format(date, 'yyyy-MM-dd');
@@ -239,6 +279,7 @@ export const exportFortnightTimesheets = (
       dayEntries.forEach((e) => {
         if (e.adhocJobId) {
           adHocHours += e.hours;
+          adHocJobIdsForRow.add(String(e.adhocJobId));
           const label =
             e.adhocJobName?.trim() ||
             (e.adhocJobId ? `Ad Hoc Job #${e.adhocJobId}` : '');
@@ -264,7 +305,23 @@ export const exportFortnightTimesheets = (
     row.push(cleaner.bankAccountName || '');
     row.push(cleaner.bankBsb || '');
     row.push(cleaner.bankAccountNumber || '');
-    row.push(site ? managerNoteForSite(site, siteNotesLookup) : '');
+    const adHocNameHints = new Set<string>(adHocJobNames);
+    for (const id of Array.from(adHocJobIdsForRow)) {
+      const job = adHocById.get(String(id));
+      if (!job) continue;
+      if (job.jobName?.trim()) adHocNameHints.add(job.jobName.trim());
+      if (job.siteName?.trim()) adHocNameHints.add(job.siteName.trim());
+      if (job.manualSiteName?.trim()) adHocNameHints.add(job.manualSiteName.trim());
+    }
+    row.push(
+      managerNoteForExport(
+        siteNotesLookup,
+        site,
+        derivedSiteName,
+        Array.from(adHocJobIdsForRow),
+        Array.from(adHocNameHints)
+      )
+    );
     rows.push(row);
   });
 

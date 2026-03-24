@@ -44,6 +44,19 @@ function normalizeScheduleType(raw: string | undefined | null): 'once_off' | 're
   return 'once_off';
 }
 
+function getAdHocCostRateForDate(job: AdHocJob, date: Date, publicHolidayDates: Set<string>): number {
+  const base = job.costRatePerHour ?? 0;
+  const ymd = format(date, "yyyy-MM-dd");
+  if (publicHolidayDates.has(ymd) && job.publicHolidayCostRateOverride != null) {
+    return job.publicHolidayCostRateOverride;
+  }
+  const dow = getDay(date);
+  if (dow === 6 && job.saturdayCostRateOverride != null) return job.saturdayCostRateOverride;
+  if (dow === 0 && job.sundayCostRateOverride != null) return job.sundayCostRateOverride;
+  if (job.weekdayCostRateOverride != null) return job.weekdayCostRateOverride;
+  return base;
+}
+
 const TimeEntryForm: React.FC<TimeEntryFormProps> = ({ 
   sites, cleaners, entries, currentPeriod, onSaveBatch, onUpdateSite
 }) => {
@@ -745,12 +758,15 @@ const TimeEntryForm: React.FC<TimeEntryFormProps> = ({
       let cleanerActualTotal = 0;
       let estPay = 0;
 
-      // Site labour rates (Weekday, Sat, Sun, PH) — Est. Pay uses these, not the cleaner's personal rate
-      const weekdayRate = activeSite.budget_weekday_labour_rate ?? activeSite.budget_labour_rate ?? 0;
-      const saturdayRate = activeSite.budget_saturday_labour_rate ?? weekdayRate;
-      const sundayRate = activeSite.budget_sunday_labour_rate ?? weekdayRate;
-      const phRate = activeSite.budget_ph_labour_rate ?? weekdayRate;
       const phInPeriod = getPublicHolidaysInRange(currentPeriod.startDate, currentPeriod.endDate);
+      const occurrenceTotalsByDate = activeAdHocOccurrences.reduce<Record<string, { hours: number; cost: number }>>((acc, occ) => {
+        if (occ.hours <= 0) return acc;
+        const bucket = acc[occ.date] ?? { hours: 0, cost: 0 };
+        bucket.hours += occ.hours;
+        bucket.cost += occ.costTotal;
+        acc[occ.date] = bucket;
+        return acc;
+      }, {});
 
       dates.forEach((date) => {
         const dateStr = format(date, "yyyy-MM-dd");
@@ -760,7 +776,12 @@ const TimeEntryForm: React.FC<TimeEntryFormProps> = ({
           draftHours[dateStr] !== undefined ? draftHours[dateStr] : existingForCleaner;
         cleanerActualTotal += draftForCleaner;
         if (draftForCleaner > 0) {
-          const rate = getSiteRateForDate(date, weekdayRate, saturdayRate, sundayRate, phRate, phInPeriod);
+          const occurrenceTotals = occurrenceTotalsByDate[dateStr];
+          const rate =
+            (occurrenceTotals && occurrenceTotals.hours > 0
+              ? occurrenceTotals.cost / occurrenceTotals.hours
+              : undefined) ??
+            getAdHocCostRateForDate(activeAdHocJob, date, phInPeriod);
           estPay += draftForCleaner * rate;
         }
       });
@@ -851,7 +872,7 @@ const TimeEntryForm: React.FC<TimeEntryFormProps> = ({
       isPeriodBudget: usePeriodCap,
       periodCap,
     };
-  }, [activeSite, selectedCleanerId, dates, draftHours, siteEntriesByDate, adHocEntriesByDate, adhocJobId, activeAdHocJob, currentPeriod]);
+  }, [activeSite, selectedCleanerId, dates, draftHours, siteEntriesByDate, adHocEntriesByDate, adhocJobId, activeAdHocJob, activeAdHocOccurrences, activeAdHocTotals, currentPeriod]);
 
   if (activeSiteId && activeSite) {
     return (

@@ -8,7 +8,6 @@ import TimeEntryForm from './components/TimeEntryForm';
 import SiteDetail from './components/SiteDetail';
 import CleanerManager from './components/CleanerManager';
 import TeamManager from './components/TeamManager';
-import AuthTest from './components/AuthTest';
 import SignInScreen from './components/SignInScreen';
 import UnauthorizedScreen from './components/UnauthorizedScreen';
 import { DevBypassBanner } from './components/DevBypassBanner';
@@ -328,8 +327,6 @@ const AppContent: FC = () => {
             onRefreshSites={fetchSites}
           />
         );
-      case 'auth-test':
-        return <AuthTest />;
       default: return <div>Coming Soon</div>;
     }
   };

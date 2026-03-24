@@ -217,7 +217,5 @@ export type ViewType =
   | 'team'
   | 'cleaners'
   | 'timesheets'
-  | 'insights'
   | 'adhoc-jobs'
-  | 'site-detail'
-  | 'auth-test';
+  | 'site-detail';

@@ -324,6 +324,7 @@ export function pickSiteNoteForPeriod(
 export type SiteNotesExportLookup = {
   bySiteId: Record<string, string>;
   bySiteNameLower: Record<string, string>;
+  byAdhocTag: Record<string, string>;
 };
 
 /** For XLSX export: map by normalized site id and by lookup display name (ids can differ from app sites). */
@@ -334,6 +335,7 @@ export function buildSiteNotesExportLookup(
   const p = comparablePeriodYmd(periodStartYmd);
   const bySiteId: Record<string, string> = {};
   const bySiteNameLower: Record<string, string> = {};
+  const byAdhocTag: Record<string, string> = {};
 
   for (const n of notes) {
     if (n.cleanerId != null && String(n.cleanerId).trim() !== "") continue;
@@ -341,11 +343,20 @@ export function buildSiteNotesExportLookup(
     const body = n.noteBody?.trim();
     if (!body) continue;
     const sid = sharepoint.normalizeListItemId(n.siteId);
-    if (sid) bySiteId[sid] = body;
+    if (sid) {
+      bySiteId[sid] = body;
+    }
     const nm = normalizeSiteLabelForNotes(n.siteLookupName);
-    if (nm) bySiteNameLower[nm] = body;
+    if (nm) {
+      bySiteNameLower[nm] = body;
+    }
+    for (const rawTag of n.tags ?? []) {
+      const tag = String(rawTag ?? "").trim().toLowerCase();
+      if (!tag.startsWith("adhocjob:")) continue;
+      byAdhocTag[tag] = body;
+    }
   }
-  return { bySiteId, bySiteNameLower };
+  return { bySiteId, bySiteNameLower, byAdhocTag };
 }
 
 export async function listAllTimesheetPeriodNotes(

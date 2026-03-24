@@ -1,6 +1,6 @@
 
 import React from 'react';
-import { LayoutDashboard, Building2, Users, Clock, BrainCircuit, ChevronRight, KeyRound, X, Briefcase } from 'lucide-react';
+import { LayoutDashboard, Building2, Users, Clock, ChevronRight, X, Briefcase } from 'lucide-react';
 import { ViewType } from '../types';
 import { useAppAuth } from '../contexts/AppAuthContext';
 
@@ -31,8 +31,6 @@ const Sidebar: React.FC<SidebarProps> = ({ currentView, onViewChange, mobileOpen
     { id: 'cleaners', label: 'Workforce', icon: Users },
     { id: 'timesheets', label: 'Timesheets', icon: Clock },
     { id: 'adhoc-jobs', label: 'Ad Hoc Jobs', icon: Briefcase },
-    { id: 'insights', label: 'AI Insights', icon: BrainCircuit },
-    { id: 'auth-test', label: 'Auth Test', icon: KeyRound },
   ];
 
   const panel = (

@@ -289,33 +289,6 @@ const TimeEntryForm: React.FC<TimeEntryFormProps> = ({
     return map;
   }, [sites, currentPeriod, phInPeriod, dates, getPlannedHoursForDate]);
 
-  const totalEstimatedBudget = useMemo(() => {
-    return filteredSites.reduce(
-      (sum, site) => sum + (estimatedBudgetBySiteId[site.id] ?? 0),
-      0
-    );
-  }, [filteredSites, estimatedBudgetBySiteId]);
-
-  /** Labour cost from timesheet hours entered against ad hoc jobs this fortnight (hours × pay snapshot). */
-  const adHocLabourPaidFortnight = useMemo(() => {
-    const start = currentPeriod.startDate;
-    const endExclusive = addDays(currentPeriod.endDate, 1);
-    let sum = 0;
-    entries.forEach((e) => {
-      if (!e.adhocJobId) return;
-      const d = new Date(e.date);
-      if (d >= start && d < endExclusive) {
-        sum += e.hours * (e.pay_rate_snapshot ?? 0);
-      }
-    });
-    return sum;
-  }, [entries, currentPeriod.startDate, currentPeriod.endDate]);
-
-  const portfolioBudgetWithAdHoc = useMemo(
-    () => totalEstimatedBudget + adHocLabourPaidFortnight,
-    [totalEstimatedBudget, adHocLabourPaidFortnight]
-  );
-
   const adHocSummaryById = useMemo(() => {
     const map: Record<
       string,
@@ -1190,7 +1163,7 @@ const TimeEntryForm: React.FC<TimeEntryFormProps> = ({
         </div>
       </div>
 
-      <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-7 gap-3">
+      <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-6 gap-3">
         {([
           { key: 'all' as QueueKey, label: 'All Sites', count: queueCounts.all },
           { key: 'needs-hours' as QueueKey, label: 'Sites needing hours', count: queueCounts.needs },
@@ -1222,22 +1195,6 @@ const TimeEntryForm: React.FC<TimeEntryFormProps> = ({
             </button>
           );
         })}
-        <div className="h-full text-left so-card-soft px-3.5 py-3 rounded-xl border-transparent">
-          <div className="flex h-full flex-col">
-          <p className="min-h-[2.1rem] text-[11px] font-medium text-gray-500 uppercase tracking-[0.18em] leading-snug">
-            Estimated budget
-          </p>
-          <p className="mt-auto text-[20px] font-semibold leading-none tabular-nums text-gray-900">
-            {new Intl.NumberFormat('en-AU', { style: 'currency', currency: 'AUD', minimumFractionDigits: 0, maximumFractionDigits: 0 }).format(portfolioBudgetWithAdHoc)}
-          </p>
-          {adHocLabourPaidFortnight > 0 && (
-            <p className="text-[9px] text-gray-500 mt-2 leading-tight">
-              Incl. ad hoc labour entered:{' '}
-              {new Intl.NumberFormat('en-AU', { style: 'currency', currency: 'AUD', minimumFractionDigits: 0, maximumFractionDigits: 0 }).format(adHocLabourPaidFortnight)}
-            </p>
-          )}
-          </div>
-        </div>
       </div>
       <div className="relative">
         <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" size={18} />

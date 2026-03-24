@@ -221,7 +221,7 @@ const SiteDetail: React.FC<SiteDetailProps> = ({ site, cleaners, entries, curren
           <button
             type="button"
             onClick={onBack}
-            className="flex items-center gap-2 bg-white text-gray-900 border border-[#edeef0] px-4 py-2.5 rounded-lg text-sm font-bold hover:bg-gray-50 transition-colors"
+            className="flex items-center gap-2 so-btn-secondary px-4 py-2.5 rounded-lg text-sm font-bold transition-colors"
           >
             <ArrowLeft size={16} />
             Back to {backLabel}
@@ -258,7 +258,7 @@ const SiteDetail: React.FC<SiteDetailProps> = ({ site, cleaners, entries, curren
             <button
               type="button"
               onClick={() => setShowAssignForm(true)}
-              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[11px] font-bold bg-gray-900 text-white hover:bg-black transition-colors"
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[11px] font-bold so-btn-primary transition-colors"
             >
               <UserPlus size={14} />
               Assign cleaner
@@ -406,7 +406,7 @@ const SiteDetail: React.FC<SiteDetailProps> = ({ site, cleaners, entries, curren
                 type="button"
                 disabled={!assignCleanerId || savingAssignment}
                 onClick={handleCreateAssignment}
-                className="px-3 py-1.5 text-[11px] font-bold rounded-lg bg-gray-900 text-white disabled:opacity-40"
+                className="px-3 py-1.5 text-[11px] font-bold rounded-lg so-btn-primary disabled:opacity-40"
               >
                 {savingAssignment ? 'Saving…' : 'Save assignment'}
               </button>

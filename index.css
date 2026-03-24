@@ -203,3 +203,15 @@ body {
   }
 }
 
+/* Mobile utilities */
+.table-scroll-mobile {
+  overflow-x: auto;
+  overflow-y: visible;
+  -webkit-overflow-scrolling: touch;
+}
+
+.touch-target {
+  min-width: 2.5rem;
+  min-height: 2.5rem;
+}
+

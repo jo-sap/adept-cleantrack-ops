@@ -19,7 +19,7 @@ const UnauthorizedScreen: React.FC<UnauthorizedScreenProps> = ({ onSignOut }) =>
         <button
           type="button"
           onClick={onSignOut}
-          className="mt-6 px-6 py-2.5 bg-gray-900 text-white text-sm font-medium rounded-xl hover:bg-black transition-colors"
+          className="mt-6 px-6 py-2.5 so-btn-primary text-sm font-medium rounded-xl transition-colors"
         >
           Sign out
         </button>

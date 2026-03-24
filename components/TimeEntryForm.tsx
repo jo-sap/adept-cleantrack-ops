@@ -1308,7 +1308,7 @@ const TimeEntryForm: React.FC<TimeEntryFormProps> = ({
           const under = variance < -0.05;
 
           const cardClasses = [
-            "group bg-white border border-[#edeef0] rounded-lg p-4 cursor-pointer flex items-center justify-between transition-colors",
+            "group bg-white border border-[#edeef0] rounded-lg p-3 sm:p-4 cursor-pointer flex items-center justify-between gap-2 sm:gap-3 transition-colors",
           ];
           if (isBalanced) {
             cardClasses.push("border-green-500 bg-green-50/70");
@@ -1322,20 +1322,20 @@ const TimeEntryForm: React.FC<TimeEntryFormProps> = ({
             onClick={() => setActiveSiteId(site.id)}
             className={cardClasses.join(" ")}
           >
-            <div className="flex items-center gap-4 w-1/3">
-              <div className={`w-10 h-10 border border-[#edeef0] rounded-xl flex items-center justify-center text-gray-400 ${isBalanced ? "bg-green-100" : "bg-gray-50 group-hover:bg-white"}`}>
-                <Building size={20} />
+            <div className="flex items-center gap-2 sm:gap-4 min-w-0 flex-1">
+              <div className={`w-8 h-8 sm:w-10 sm:h-10 border border-[#edeef0] rounded-xl flex items-center justify-center text-gray-400 shrink-0 ${isBalanced ? "bg-green-100" : "bg-gray-50 group-hover:bg-white"}`}>
+                <Building size={18} className="sm:w-5 sm:h-5" />
               </div>
               <div className="min-w-0">
-                <h4 className="text-sm font-bold text-gray-900 truncate">
+                <h4 className="text-sm font-bold text-gray-900 leading-tight break-words">
                   {site.name}
                 </h4>
-                <p className="text-[10px] text-gray-400 truncate uppercase font-bold">
+                <p className="hidden sm:block text-[10px] text-gray-400 truncate uppercase font-bold">
                   {site.address}
                 </p>
               </div>
             </div>
-            <div className="flex -space-x-2 w-32">
+            <div className="hidden sm:flex -space-x-2 w-32">
               {site.assigned_cleaner_ids.slice(0, 3).map(cid => (
                 <div
                   key={cid}
@@ -1347,15 +1347,15 @@ const TimeEntryForm: React.FC<TimeEntryFormProps> = ({
                 </div>
               ))}
             </div>
-            <div className="text-right border-l border-gray-100 pl-8 min-w-[120px] space-y-2">
+            <div className="text-right border-l border-gray-100 pl-3 sm:pl-8 min-w-[96px] sm:min-w-[120px] space-y-1.5 sm:space-y-2 shrink-0">
               <div>
                 <p className="text-[9px] font-bold text-gray-400 uppercase">
                   Assigned budget
                 </p>
-                <p className="text-xs font-black text-gray-800">
+                <p className="text-[11px] sm:text-xs font-black text-gray-800">
                   {budget.toFixed(1)}h
                 </p>
-                <p className="text-xs font-black text-gray-800">
+                <p className="text-[11px] sm:text-xs font-black text-gray-800">
                   {new Intl.NumberFormat('en-AU', { style: 'currency', currency: 'AUD', minimumFractionDigits: 0, maximumFractionDigits: 0 }).format(
                     budget * (site.budget_weekday_labour_rate ?? site.budget_labour_rate ?? 0)
                   )}
@@ -1365,7 +1365,7 @@ const TimeEntryForm: React.FC<TimeEntryFormProps> = ({
                 <p className="text-[9px] font-bold text-gray-400 uppercase">
                   Est. budget
                 </p>
-                <p className="text-xs font-black text-gray-800">
+                <p className="text-[11px] sm:text-xs font-black text-gray-800">
                   {new Intl.NumberFormat('en-AU', { style: 'currency', currency: 'AUD', minimumFractionDigits: 0, maximumFractionDigits: 0 }).format(estimatedBudgetBySiteId[site.id] ?? 0)}
                 </p>
               </div>

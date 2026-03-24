@@ -362,7 +362,7 @@ const AppContent: FC = () => {
               </span>
             </div>
           </div>
-          <div className="flex items-center gap-2 sm:gap-4 flex-shrink-0">
+          <div className="flex w-full sm:w-auto items-center justify-between sm:justify-start gap-2 sm:gap-4 flex-shrink-0">
             <DevBypassBanner />
             <div className="flex items-center gap-1 text-[11px] sm:text-[12px] text-gray-500 font-medium">
               <button
@@ -407,7 +407,7 @@ const AppContent: FC = () => {
                 logout();
                 signOutApp();
               }}
-              className="text-[11px] font-medium text-gray-500 hover:text-gray-900 px-2 py-1.5 rounded-md hover:bg-gray-100 touch-manipulation"
+              className="text-[11px] font-medium text-gray-500 hover:text-gray-900 px-2 py-1.5 rounded-md hover:bg-gray-100 touch-manipulation whitespace-nowrap"
             >
               Logout
             </button>

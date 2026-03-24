@@ -180,23 +180,23 @@ export default function AdHocJobsManager() {
         One-off and additional work: carpet cleans, emergency cleans, sporadic jobs. Create jobs, capture requester details and approval proof, then link timesheets.
       </p>
 
-      <div className="flex flex-col sm:flex-row gap-4 items-start sm:items-center justify-between">
-        <div className="flex flex-wrap gap-3 items-center">
-          <label className="flex items-center gap-2">
-            <span className="text-xs font-bold text-gray-500 uppercase">Month</span>
+      <div className="flex flex-col gap-4 sm:gap-5">
+        <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-3">
+          <label className="flex flex-col gap-1.5">
+            <span className="text-[11px] font-bold text-gray-500 uppercase">Month</span>
             <input
               type="month"
               value={filterMonth}
               onChange={(e) => setFilterMonth(e.target.value)}
-              className="border border-[#edeef0] rounded-lg px-3 py-2 text-sm"
+              className="w-full border border-[#edeef0] rounded-lg px-3 py-2 text-sm"
             />
           </label>
-          <label className="flex items-center gap-2">
-            <span className="text-xs font-bold text-gray-500 uppercase">Status</span>
+          <label className="flex flex-col gap-1.5">
+            <span className="text-[11px] font-bold text-gray-500 uppercase">Status</span>
             <select
               value={filterStatus}
               onChange={(e) => setFilterStatus(e.target.value)}
-              className="border border-[#edeef0] rounded-lg px-3 py-2 text-sm"
+              className="w-full border border-[#edeef0] rounded-lg px-3 py-2 text-sm"
             >
               <option value="">All</option>
               {STATUS_OPTIONS.map((s) => (
@@ -206,12 +206,12 @@ export default function AdHocJobsManager() {
           </label>
           {isAdmin && (
             <>
-              <label className="flex items-center gap-2">
-                <span className="text-xs font-bold text-gray-500 uppercase">Manager</span>
+              <label className="flex flex-col gap-1.5">
+                <span className="text-[11px] font-bold text-gray-500 uppercase">Manager</span>
                 <select
                   value={filterManagerId}
                   onChange={(e) => setFilterManagerId(e.target.value)}
-                  className="border border-[#edeef0] rounded-lg px-3 py-2 text-sm min-w-[140px]"
+                  className="w-full border border-[#edeef0] rounded-lg px-3 py-2 text-sm"
                 >
                   <option value="">All</option>
                   {managers.map((m) => (
@@ -219,12 +219,12 @@ export default function AdHocJobsManager() {
                   ))}
                 </select>
               </label>
-              <label className="flex items-center gap-2">
-                <span className="text-xs font-bold text-gray-500 uppercase">Site</span>
+              <label className="flex flex-col gap-1.5 sm:col-span-2 xl:col-span-1">
+                <span className="text-[11px] font-bold text-gray-500 uppercase">Site</span>
                 <select
                   value={filterSiteId}
                   onChange={(e) => setFilterSiteId(e.target.value)}
-                  className="border border-[#edeef0] rounded-lg px-3 py-2 text-sm min-w-[180px]"
+                  className="w-full border border-[#edeef0] rounded-lg px-3 py-2 text-sm"
                 >
                   <option value="">All</option>
                   {sites.map((s) => (
@@ -235,11 +235,11 @@ export default function AdHocJobsManager() {
             </>
           )}
         </div>
-        <div className="flex items-center gap-2">
+        <div className="flex flex-col sm:flex-row sm:items-center gap-2">
           <button
             type="button"
             onClick={() => exportAdHocJobsToSpreadsheet(jobs, filterMonth)}
-            className="flex items-center gap-1.5 px-4 py-2.5 bg-green-50 text-green-700 border border-green-200 rounded-lg text-sm font-bold hover:bg-green-100 transition-colors"
+            className="w-full sm:w-auto justify-center flex items-center gap-1.5 px-4 py-2.5 bg-green-50 text-green-700 border border-green-200 rounded-lg text-sm font-bold hover:bg-green-100 transition-colors"
           >
             <FileSpreadsheet size={18} />
             Export (XLSX)
@@ -247,7 +247,7 @@ export default function AdHocJobsManager() {
           <button
             type="button"
             onClick={openCreate}
-            className="flex items-center gap-2 bg-gray-900 text-white px-4 py-2.5 rounded-lg text-sm font-bold hover:bg-gray-800"
+            className="w-full sm:w-auto justify-center flex items-center gap-2 so-btn-primary px-4 py-2.5 rounded-lg text-sm font-bold"
           >
             <Plus size={18} />
             New Ad Hoc Job
@@ -277,8 +277,70 @@ export default function AdHocJobsManager() {
           No ad hoc jobs match the filters. Create one to get started.
         </div>
       ) : (
-        <div className="border border-[#edeef0] rounded-lg bg-white shadow-sm overflow-x-hidden">
-          <table className="w-full border-collapse text-left table-fixed">
+        <>
+        <div className="md:hidden space-y-2">
+          {jobs.map((j) => {
+            const canDelete =
+              isAdmin ||
+              (currentUserId &&
+                j.assignedManagerId &&
+                j.assignedManagerId === currentUserId);
+            return (
+              <div key={j.id} className="border border-[#edeef0] rounded-lg bg-white px-3 py-3">
+                <div className="flex items-start justify-between gap-2">
+                  <div className="min-w-0">
+                    <button
+                      type="button"
+                      onClick={() => openEdit(j)}
+                      className="text-left text-sm font-semibold text-gray-900 break-words hover:underline"
+                      title={j.jobName || "—"}
+                    >
+                      {j.jobName || "—"}
+                    </button>
+                    <p className="text-[11px] text-gray-500 mt-1">
+                      {scheduleTypeLabel(j.jobType)} · {j.assignedManagerName || "No manager"}
+                    </p>
+                    <p className="text-[11px] text-gray-500 mt-0.5">
+                      Scheduled: {j.scheduledDate ? format(new Date(j.scheduledDate), "dd/MM/yy") : "—"}
+                    </p>
+                    <div className="mt-1.5">
+                      <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded ${
+                        j.status === "Completed" ? "bg-green-100 text-green-800" :
+                        j.status === "Scheduled" || j.status === "Approved" ? "bg-blue-100 text-blue-800" :
+                        "bg-gray-100 text-gray-800"
+                      }`}>
+                        {j.status || "Requested"}
+                      </span>
+                    </div>
+                  </div>
+                  <div className="flex items-center gap-1 shrink-0">
+                    <button
+                      type="button"
+                      onClick={() => openEdit(j)}
+                      className="touch-target p-2 rounded text-blue-600 hover:bg-blue-50"
+                      aria-label={`Edit ${j.jobName}`}
+                    >
+                      <Pencil size={18} />
+                    </button>
+                    {canDelete && (
+                      <button
+                        type="button"
+                        onClick={() => handleDelete(j)}
+                        className="touch-target p-2 rounded text-red-600 hover:bg-red-50 disabled:opacity-40"
+                        aria-label={`Delete ${j.jobName}`}
+                        disabled={rowDeletingId === j.id}
+                      >
+                        <Trash2 size={18} />
+                      </button>
+                    )}
+                  </div>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+        <div className="hidden md:block border border-[#edeef0] rounded-lg bg-white shadow-sm table-scroll-mobile">
+          <table className="w-full min-w-[920px] border-collapse text-left table-fixed">
             <thead>
               <tr className="bg-[#fcfcfb] border-b border-[#edeef0]">
                 <th className="w-[21%] px-2 py-2 text-[9px] font-bold text-gray-500 uppercase tracking-widest text-left">Job Name</th>
@@ -366,6 +428,7 @@ export default function AdHocJobsManager() {
             </tbody>
           </table>
         </div>
+        </>
       )}
 
       {modalOpen && (
@@ -859,23 +922,23 @@ function AdHocJobFormModal({
   const [dragOver, setDragOver] = useState(false);
 
   const field = (label: string, id: string, children: React.ReactNode) => (
-    <div className="mb-4">
+    <div className="mb-3 sm:mb-4">
       <label htmlFor={id} className="block text-xs font-bold text-gray-500 uppercase mb-1">{label}</label>
       {children}
     </div>
   );
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4" onClick={onClose}>
+    <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center bg-black/40 p-0 sm:p-4" onClick={onClose}>
       <div
-        className="bg-white rounded-xl shadow-xl max-w-2xl w-full max-h-[90vh] overflow-y-auto"
+        className="bg-white w-full h-[100dvh] sm:h-auto sm:rounded-xl shadow-xl max-w-2xl sm:max-h-[90vh] overflow-y-auto"
         onClick={(e) => e.stopPropagation()}
       >
-        <div className="flex justify-between items-center p-6 border-b border-[#edeef0]">
+        <div className="sticky top-0 z-10 bg-white flex justify-between items-center p-4 sm:p-6 border-b border-[#edeef0]">
           <h3 className="text-lg font-bold text-gray-900">{isEdit ? "Edit Ad Hoc Job" : "New Ad Hoc Job"}</h3>
           <button type="button" onClick={onClose} className="p-2 rounded text-gray-400 hover:text-gray-600"><X size={20} /></button>
         </div>
-        <form onSubmit={handleSubmit} className="p-6 space-y-4">
+        <form onSubmit={handleSubmit} className="p-4 sm:p-6 space-y-3 sm:space-y-4 pb-28 sm:pb-6">
           {field("Job Name *", "jobName", (
             <input
               id="jobName"
@@ -924,7 +987,7 @@ function AdHocJobFormModal({
           </div>
           {field("Site", "site", (
             <div>
-              <div className="flex items-center gap-3 mb-2 text-xs">
+              <div className="flex flex-col sm:flex-row sm:items-center gap-2 sm:gap-3 mb-2 text-xs">
                 <label className="inline-flex items-center gap-1">
                   <input
                     type="radio"
@@ -1568,7 +1631,7 @@ function AdHocJobFormModal({
               .
             </p>
             <div
-              className={`border-2 border-dashed rounded-lg p-6 text-center transition-colors ${
+              className={`border-2 border-dashed rounded-lg p-4 sm:p-6 text-center transition-colors ${
                 dragOver ? "border-blue-500 bg-blue-50" : "border-[#edeef0] bg-gray-50/50"
               }`}
               onDragOver={(e) => { e.preventDefault(); e.stopPropagation(); setDragOver(true); }}
@@ -1700,9 +1763,9 @@ function AdHocJobFormModal({
               placeholder="Reference to email / ticket"
             />
           ))}
-          <div className="flex justify-end gap-2 pt-4 border-t border-[#edeef0]">
-            <button type="button" onClick={onClose} className="px-4 py-2 rounded-lg border border-[#edeef0] text-gray-700 hover:bg-gray-50">Cancel</button>
-            <button type="submit" disabled={submitLoading || !form.jobName?.trim()} className="px-4 py-2 rounded-lg bg-gray-900 text-white font-medium hover:bg-gray-800 disabled:opacity-50 flex items-center gap-2">
+          <div className="sticky bottom-0 left-0 right-0 -mx-4 sm:mx-0 px-4 sm:px-0 pb-[max(0.75rem,env(safe-area-inset-bottom))] pt-3 bg-white border-t border-[#edeef0] flex flex-col-reverse sm:flex-row sm:justify-end gap-2">
+            <button type="button" onClick={onClose} className="w-full sm:w-auto px-4 py-2 rounded-lg border border-[#edeef0] text-gray-700 hover:bg-gray-50">Cancel</button>
+            <button type="submit" disabled={submitLoading || !form.jobName?.trim()} className="w-full sm:w-auto px-4 py-2 rounded-lg so-btn-primary font-medium disabled:opacity-50 flex items-center justify-center gap-2">
               {submitLoading && <Loader2 className="animate-spin" size={18} />}
               {isEdit ? "Update" : "Create"}
             </button>

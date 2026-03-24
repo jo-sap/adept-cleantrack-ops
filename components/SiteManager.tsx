@@ -1016,16 +1016,16 @@ const SiteManager: React.FC<SiteManagerProps> = ({ onUpdateSite, onViewSite, ref
           </p>
         </div>
         {isAdmin && (
-          <div className="flex items-center gap-2 flex-shrink-0">
+          <div className="flex flex-col sm:flex-row sm:items-center gap-2 w-full sm:w-auto flex-shrink-0">
             <button
               onClick={openBulkModal}
-              className="so-btn-secondary px-4 py-2.5 text-sm font-medium flex items-center gap-2 touch-manipulation"
+              className="w-full sm:w-auto justify-center so-btn-secondary px-4 py-2.5 text-sm font-medium flex items-center gap-2 touch-manipulation"
             >
               <Layers size={16} /> Bulk Add
             </button>
             <button
               onClick={openAdd}
-              className="so-btn-primary px-4 py-2.5 text-sm font-medium flex items-center gap-2 touch-manipulation shadow-sm"
+              className="w-full sm:w-auto justify-center so-btn-primary px-4 py-2.5 text-sm font-medium flex items-center gap-2 touch-manipulation shadow-sm"
             >
               <Plus size={16} /> New Site
             </button>
@@ -1046,7 +1046,7 @@ const SiteManager: React.FC<SiteManagerProps> = ({ onUpdateSite, onViewSite, ref
       </div>
 
       {isAdmin && selectedSiteIds.length > 0 && (
-        <div className="sticky top-12 z-20 flex flex-wrap items-center gap-2 py-2 px-3 bg-amber-50 border border-amber-200 rounded-lg shadow-sm">
+        <div className="hidden md:flex sticky top-12 z-20 flex-wrap items-center gap-2 py-2 px-3 bg-amber-50 border border-amber-200 rounded-lg shadow-sm">
           <span className="text-sm font-medium text-amber-800">
             {selectedSiteIds.length} selected
           </span>
@@ -1089,8 +1089,86 @@ const SiteManager: React.FC<SiteManagerProps> = ({ onUpdateSite, onViewSite, ref
         </div>
       ) : (
         <>
-        <div className="so-table bg-white overflow-hidden table-scroll-mobile">
-          <table className="w-full border-collapse text-left min-w-0 table-auto md:table-fixed md:min-w-[1020px]">
+        <div className="md:hidden space-y-2">
+          {sortedSites.map((site) => {
+            const budget = budgetsBySiteId[String(site.id)];
+            const fortnightCap = budget?.fortnightCap ?? 0;
+            const budgetRate = budget?.weekdayLabourRate ?? budget?.budgetLabourRate;
+            return (
+              <div
+                key={site.id}
+                className="border border-[#edeef0] rounded-lg bg-white px-3 py-3"
+              >
+                <div className="flex items-start justify-between gap-2">
+                  <div className="min-w-0">
+                    {onViewSite ? (
+                      <button
+                        type="button"
+                        onClick={() => onViewSite(site.id)}
+                        className="text-left text-sm font-bold text-gray-900 break-words hover:underline"
+                      >
+                        {site.siteName || "Unnamed site"}
+                      </button>
+                    ) : (
+                      <span className="text-sm font-bold text-gray-900 break-words">
+                        {site.siteName || "Unnamed site"}
+                      </span>
+                    )}
+                    <p className="text-[11px] text-gray-500 mt-1">
+                      {site.state || "—"} · {fortnightCap}h cap
+                    </p>
+                    {isAdmin && site.monthlyRevenue != null && (
+                      <p className="text-[11px] text-gray-500 mt-0.5">
+                        Revenue:{" "}
+                        {new Intl.NumberFormat("en-AU", {
+                          style: "currency",
+                          currency: "AUD",
+                          minimumFractionDigits: 2,
+                          maximumFractionDigits: 2,
+                        }).format(Number(site.monthlyRevenue))}
+                      </p>
+                    )}
+                    {budgetRate != null && budgetRate >= 0 && (
+                      <p className="text-[11px] text-gray-500 mt-0.5">
+                        Weekday rate: ${Number(budgetRate).toFixed(2)}/hr
+                      </p>
+                    )}
+                  </div>
+                  {isAdmin && (
+                    <div className="flex items-center gap-1 shrink-0">
+                      <button
+                        onClick={() => openEdit(site)}
+                        className="touch-target p-2 rounded text-blue-600 hover:text-blue-800 hover:bg-blue-50 inline-flex items-center justify-center"
+                        aria-label={`Edit ${site.siteName}`}
+                        title="Edit"
+                      >
+                        <Edit3 size={18} />
+                      </button>
+                      <button
+                        onClick={() => handleSetActive(site, !site.active)}
+                        className="touch-target p-2 rounded text-gray-600 hover:text-gray-900 hover:bg-gray-100 inline-flex items-center justify-center"
+                        aria-label={site.active ? `Deactivate ${site.siteName}` : `Activate ${site.siteName}`}
+                        title={site.active ? "Deactivate" : "Activate"}
+                      >
+                        {site.active ? <UserMinus size={18} /> : <UserPlus size={18} />}
+                      </button>
+                      <button
+                        onClick={() => handleDeleteSite(site)}
+                        className="touch-target p-2 rounded text-red-600 hover:text-red-800 hover:bg-red-50 inline-flex items-center justify-center"
+                        aria-label={`Delete ${site.siteName}`}
+                        title="Delete site"
+                      >
+                        <Trash2 size={18} />
+                      </button>
+                    </div>
+                  )}
+                </div>
+              </div>
+            );
+          })}
+        </div>
+        <div className="hidden md:block so-table bg-white table-scroll-mobile">
+          <table className="w-full border-collapse text-left min-w-[860px] table-auto md:table-fixed md:min-w-[1020px]">
             <colgroup className="hidden md:contents">
               {isAdmin && <col style={{ width: '4%' }} />}
               <col style={{ width: isAdmin ? '15%' : '17%' }} />
@@ -1363,14 +1441,14 @@ const SiteManager: React.FC<SiteManagerProps> = ({ onUpdateSite, onViewSite, ref
 
       {modalMode && (
         <div
-          className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4"
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-2 sm:p-4"
           onClick={closeModal}
         >
           <div
-            className="bg-white rounded-xl shadow-xl max-w-2xl w-full mx-auto overflow-y-auto max-h-[90vh]"
+            className="bg-white rounded-xl shadow-xl w-full max-w-[96vw] sm:max-w-2xl mx-auto overflow-y-auto max-h-[90vh]"
             onClick={(e) => e.stopPropagation()}
           >
-            <div className="flex justify-between items-center p-6 border-b border-[#edeef0]">
+            <div className="flex justify-between items-center p-4 sm:p-6 border-b border-[#edeef0]">
               <h3 className="text-lg font-bold text-gray-900">
                 {modalMode === "add" ? "Create New Site" : "Edit Site"}
               </h3>
@@ -1383,8 +1461,8 @@ const SiteManager: React.FC<SiteManagerProps> = ({ onUpdateSite, onViewSite, ref
               </button>
             </div>
 
-            <div className="p-6 space-y-6">
-              <div>
+            <div className="p-4 sm:p-6 space-y-4 sm:space-y-6">
+              <div className="rounded-lg border border-[#edeef0] p-3 sm:p-4 bg-white">
                 <h4 className="text-xs font-bold text-gray-500 uppercase tracking-widest mb-3">Basic Site Information</h4>
                 <div className="space-y-4">
                   <div>
@@ -1411,7 +1489,7 @@ const SiteManager: React.FC<SiteManagerProps> = ({ onUpdateSite, onViewSite, ref
                       placeholder="Street, suburb"
                     />
                   </div>
-                  <div className="grid grid-cols-2 gap-4">
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                     <div>
                       <label className="block text-xs font-bold text-gray-500 uppercase tracking-widest mb-1">
                         $ Monthly Revenue
@@ -1478,7 +1556,7 @@ const SiteManager: React.FC<SiteManagerProps> = ({ onUpdateSite, onViewSite, ref
                 </div>
               </div>
 
-              <div>
+              <div className="rounded-lg border border-[#edeef0] p-3 sm:p-4 bg-white">
                 <h4 className="text-xs font-bold text-gray-500 uppercase tracking-widest mb-3">Visit pattern</h4>
                 <div className="space-y-3">
                   <div>
@@ -1576,7 +1654,7 @@ const SiteManager: React.FC<SiteManagerProps> = ({ onUpdateSite, onViewSite, ref
               </div>
 
               {(visitFrequency === "Weekly" || visitFrequency === "Fortnightly") && (
-              <div>
+              <div className="rounded-lg border border-[#edeef0] p-3 sm:p-4 bg-white">
                 <h4 className="text-xs font-bold text-gray-500 uppercase tracking-widest mb-3">Daily Service Hours</h4>
                 {visitFrequency === "Weekly" && (
                 <div className="grid grid-cols-7 gap-2">
@@ -1647,7 +1725,7 @@ const SiteManager: React.FC<SiteManagerProps> = ({ onUpdateSite, onViewSite, ref
               </div>
               )}
 
-              <div>
+              <div className="rounded-lg border border-[#edeef0] p-3 sm:p-4 bg-white">
                 <h4 className="text-xs font-bold text-gray-500 uppercase tracking-widest mb-3">No Service Periods</h4>
                 <p className="text-[10px] text-gray-400 mb-2">
                   Used for school holidays, shutdowns, client closures, and seasonal pauses. Matching dates will show as 0h / On Target in Timesheets.
@@ -1823,7 +1901,7 @@ const SiteManager: React.FC<SiteManagerProps> = ({ onUpdateSite, onViewSite, ref
                 </div>
               </div>
 
-              <div>
+              <div className="rounded-lg border border-[#edeef0] p-3 sm:p-4 bg-white">
                 <h4 className="text-xs font-bold text-gray-500 uppercase tracking-widest mb-3">Personnel &amp; Rates</h4>
                 <p className="text-xs text-gray-500 mb-2">Assign managers to this site.</p>
                 <div className="space-y-2">
@@ -1854,7 +1932,7 @@ const SiteManager: React.FC<SiteManagerProps> = ({ onUpdateSite, onViewSite, ref
             </div>
 
             {submitError && (
-              <div className="px-6 pb-4 space-y-2">
+              <div className="px-4 sm:px-6 pb-4 space-y-2">
                 <div className="bg-amber-50 border border-amber-200 text-amber-800 px-3 py-2 rounded-lg text-sm">
                   {submitError}
                 </div>
@@ -1870,17 +1948,17 @@ const SiteManager: React.FC<SiteManagerProps> = ({ onUpdateSite, onViewSite, ref
               </div>
             )}
 
-            <div className="p-6 pt-0 flex justify-end gap-2">
+            <div className="p-4 sm:p-6 pt-0 flex flex-col-reverse sm:flex-row sm:justify-end gap-2">
               <button
                 onClick={closeModal}
-                className="px-4 py-2 text-sm font-medium text-gray-600 hover:bg-gray-100 rounded-lg"
+                className="w-full sm:w-auto px-4 py-2 text-sm font-medium text-gray-600 hover:bg-gray-100 rounded-lg"
               >
                 Cancel
               </button>
               <button
                 onClick={handleSubmit}
                 disabled={submitLoading}
-                className="bg-gray-900 text-white px-6 py-2.5 rounded-lg text-sm font-bold hover:bg-gray-800 disabled:opacity-50 flex items-center gap-2"
+                className="w-full sm:w-auto so-btn-primary px-6 py-2.5 rounded-lg text-sm font-bold disabled:opacity-50 flex items-center justify-center gap-2"
               >
                 {submitLoading && <Loader2 className="animate-spin" size={14} />}
                 {modalMode === "add" ? "Launch New Site" : "Save"}
@@ -1896,10 +1974,10 @@ const SiteManager: React.FC<SiteManagerProps> = ({ onUpdateSite, onViewSite, ref
           onClick={() => !bulkSubmitLoading && setBulkModalOpen(false)}
         >
           <div
-            className="bg-white rounded-xl shadow-xl w-full max-w-[1600px] mx-auto overflow-y-auto max-h-[90vh]"
+            className="bg-white rounded-xl shadow-xl w-full max-w-[96vw] sm:max-w-[1600px] mx-auto overflow-y-auto max-h-[90vh]"
             onClick={(e) => e.stopPropagation()}
           >
-            <div className="flex justify-between items-center p-6 border-b border-[#edeef0]">
+            <div className="flex justify-between items-center p-4 sm:p-6 border-b border-[#edeef0]">
               <h3 className="text-lg font-bold text-gray-900">Bulk Add Sites</h3>
               <button
                 onClick={() => !bulkSubmitLoading && setBulkModalOpen(false)}
@@ -1911,11 +1989,220 @@ const SiteManager: React.FC<SiteManagerProps> = ({ onUpdateSite, onViewSite, ref
               </button>
             </div>
 
-            <div className="p-6 space-y-6">
+            <div className="p-4 sm:p-6 space-y-6">
               <div>
                 <h4 className="text-xs font-bold text-gray-500 uppercase tracking-widest mb-2">Sites</h4>
-                <div className="border border-[#edeef0] rounded-lg overflow-x-auto">
-                  <table className="w-full text-left text-sm">
+                <div className="md:hidden space-y-3">
+                  {bulkRows.map((row, rowIdx) => (
+                    <div key={row.id} className="border border-[#edeef0] rounded-lg p-3 space-y-3 bg-white">
+                      <div className="flex items-center justify-between">
+                        <p className="text-xs font-semibold text-gray-600 uppercase tracking-wider">
+                          Site {rowIdx + 1}
+                        </p>
+                        <button
+                          type="button"
+                          onClick={() => removeBulkRow(row.id)}
+                          disabled={bulkRows.length <= 1 || bulkSubmitLoading}
+                          className="text-gray-400 hover:text-red-600 disabled:opacity-40 p-1"
+                          aria-label="Remove row"
+                        >
+                          <Trash2 size={14} />
+                        </button>
+                      </div>
+
+                      <div className="space-y-1">
+                        <label className="text-[10px] font-bold text-gray-500 uppercase tracking-widest">
+                          Site Name <span className="text-red-500">*</span>
+                        </label>
+                        <input
+                          type="text"
+                          value={row.siteName}
+                          onChange={(e) => updateBulkRow(row.id, { siteName: e.target.value })}
+                          placeholder="Site name"
+                          className="w-full border border-[#edeef0] rounded px-2 py-2 text-sm"
+                          disabled={bulkSubmitLoading}
+                        />
+                      </div>
+
+                      <div className="space-y-1">
+                        <label className="text-[10px] font-bold text-gray-500 uppercase tracking-widest">Address</label>
+                        <input
+                          type="text"
+                          value={row.address}
+                          onChange={(e) => updateBulkRow(row.id, { address: e.target.value })}
+                          placeholder="Address"
+                          className="w-full border border-[#edeef0] rounded px-2 py-2 text-sm"
+                          disabled={bulkSubmitLoading}
+                        />
+                      </div>
+
+                      <div className="grid grid-cols-2 gap-2">
+                        <div className="space-y-1">
+                          <label className="text-[10px] font-bold text-gray-500 uppercase tracking-widest">$ Mon Rev</label>
+                          <input
+                            type="number"
+                            min={0}
+                            step={0.01}
+                            value={row.monthlyRevenue === "" ? "" : row.monthlyRevenue}
+                            onChange={(e) => {
+                              const v = e.target.value;
+                              updateBulkRow(row.id, { monthlyRevenue: v === "" ? "" : parseFloat(v) || 0 });
+                            }}
+                            className="w-full border border-[#edeef0] rounded px-2 py-2 text-sm"
+                            disabled={bulkSubmitLoading}
+                          />
+                        </div>
+                        <div className="space-y-1">
+                          <label className="text-[10px] font-bold text-gray-500 uppercase tracking-widest">$ Fort Budget</label>
+                          <input
+                            type="number"
+                            min={0}
+                            step={0.01}
+                            value={row.fortnightCostBudget === "" ? "" : row.fortnightCostBudget}
+                            onChange={(e) => {
+                              const v = e.target.value;
+                              updateBulkRow(row.id, { fortnightCostBudget: v === "" ? "" : parseFloat(v) || 0 });
+                            }}
+                            className="w-full border border-[#edeef0] rounded px-2 py-2 text-sm"
+                            disabled={bulkSubmitLoading}
+                          />
+                        </div>
+                      </div>
+
+                      <div className="grid grid-cols-2 gap-2">
+                        <div className="space-y-1">
+                          <label className="text-[10px] font-bold text-gray-500 uppercase tracking-widest">$/hr</label>
+                          <input
+                            type="number"
+                            min={0}
+                            step={0.01}
+                            value={row.weekdayLabourRate === "" ? "" : row.weekdayLabourRate}
+                            onChange={(e) => {
+                              const v = e.target.value;
+                              updateBulkRow(row.id, { weekdayLabourRate: v === "" ? "" : parseFloat(v) || 0 });
+                            }}
+                            placeholder="—"
+                            className="w-full border border-[#edeef0] rounded px-2 py-2 text-sm"
+                            disabled={bulkSubmitLoading}
+                          />
+                        </div>
+                        <div className="space-y-1">
+                          <label className="text-[10px] font-bold text-gray-500 uppercase tracking-widest">State</label>
+                          <select
+                            value={row.state}
+                            onChange={(e) => updateBulkRow(row.id, { state: e.target.value })}
+                            className="w-full border border-[#edeef0] rounded px-2 py-2 text-sm"
+                            disabled={bulkSubmitLoading}
+                          >
+                            <option value="">—</option>
+                            {AU_STATES.map((s) => (
+                              <option key={s} value={s}>{s}</option>
+                            ))}
+                          </select>
+                        </div>
+                      </div>
+
+                      <div className="grid grid-cols-2 gap-2 items-end">
+                        <div className="space-y-1">
+                          <label className="text-[10px] font-bold text-gray-500 uppercase tracking-widest">Visit freq</label>
+                          <select
+                            value={row.visitFrequency}
+                            onChange={(e) => updateBulkRow(row.id, { visitFrequency: e.target.value as VisitFreq })}
+                            className="w-full border border-[#edeef0] rounded px-2 py-2 text-sm"
+                            disabled={bulkSubmitLoading}
+                          >
+                            <option value="Weekly">Weekly</option>
+                            <option value="Fortnightly">Fortnightly</option>
+                            <option value="Monthly">Monthly</option>
+                          </select>
+                        </div>
+                        <label className="inline-flex items-center gap-2 pb-2">
+                          <input
+                            type="checkbox"
+                            checked={row.active}
+                            onChange={(e) => updateBulkRow(row.id, { active: e.target.checked })}
+                            className="rounded border-gray-300"
+                            disabled={bulkSubmitLoading}
+                          />
+                          <span className="text-sm text-gray-700">Active</span>
+                        </label>
+                      </div>
+
+                      {row.visitFrequency === "Monthly" ? (
+                        <div className="space-y-1">
+                          <label className="text-[10px] font-bold text-gray-500 uppercase tracking-widest">Hours per visit</label>
+                          <input
+                            type="number"
+                            min={0}
+                            step={0.5}
+                            value={row.hoursPerVisit}
+                            onChange={(e) => {
+                              const v = e.target.value;
+                              updateBulkRow(row.id, { hoursPerVisit: v === "" ? "" : parseFloat(v) || 0 });
+                            }}
+                            className="w-full border border-[#edeef0] rounded px-2 py-2 text-sm"
+                            disabled={bulkSubmitLoading}
+                          />
+                        </div>
+                      ) : (
+                        <div className="space-y-2">
+                          <p className="text-[10px] font-bold text-gray-500 uppercase tracking-widest">Week 1 Daily Hours</p>
+                          <div className="grid grid-cols-3 gap-2">
+                            {DAY_KEYS.map((day) => (
+                              <label key={day} className="space-y-1">
+                                <span className="text-[10px] text-gray-500">{day}</span>
+                                <input
+                                  type="number"
+                                  min={0}
+                                  step={0.5}
+                                  value={row.dailyHours[day]}
+                                  onChange={(e) => {
+                                    const v = e.target.value;
+                                    updateBulkRow(row.id, {
+                                      dailyHours: { ...row.dailyHours, [day]: v === "" ? "" : parseFloat(v) || 0 },
+                                    });
+                                  }}
+                                  className="w-full border border-[#edeef0] rounded px-2 py-1.5 text-sm"
+                                  disabled={bulkSubmitLoading}
+                                />
+                              </label>
+                            ))}
+                          </div>
+                        </div>
+                      )}
+
+                      {row.visitFrequency === "Fortnightly" && (
+                        <div className="space-y-2">
+                          <p className="text-[10px] font-bold text-gray-500 uppercase tracking-widest">Week 2 Daily Hours</p>
+                          <div className="grid grid-cols-3 gap-2">
+                            {DAY_KEYS.map((day) => (
+                              <label key={"mobile-w2-" + day} className="space-y-1">
+                                <span className="text-[10px] text-gray-500">{day}</span>
+                                <input
+                                  type="number"
+                                  min={0}
+                                  step={0.5}
+                                  value={row.dailyHoursWeek2[day]}
+                                  onChange={(e) => {
+                                    const v = e.target.value;
+                                    updateBulkRow(row.id, {
+                                      dailyHoursWeek2: { ...row.dailyHoursWeek2, [day]: v === "" ? "" : parseFloat(v) || 0 },
+                                    });
+                                  }}
+                                  className="w-full border border-[#edeef0] rounded px-2 py-1.5 text-sm"
+                                  disabled={bulkSubmitLoading}
+                                />
+                              </label>
+                            ))}
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  ))}
+                </div>
+
+                <div className="hidden md:block border border-[#edeef0] rounded-lg table-scroll-mobile">
+                  <table className="w-full min-w-[1180px] text-left text-sm">
                     <thead>
                       <tr className="bg-gray-50 border-b border-[#edeef0] text-[10px] font-bold text-gray-500 uppercase tracking-widest">
                         <th className="py-2 px-1 w-8"></th>
@@ -2154,10 +2441,10 @@ const SiteManager: React.FC<SiteManagerProps> = ({ onUpdateSite, onViewSite, ref
               )}
             </div>
 
-            <div className="p-6 pt-0 flex justify-end gap-2">
+            <div className="p-4 sm:p-6 pt-0 flex flex-col-reverse sm:flex-row sm:justify-end gap-2">
               <button
                 onClick={() => !bulkSubmitLoading && setBulkModalOpen(false)}
-                className="px-4 py-2 text-sm font-medium text-gray-600 hover:bg-gray-100 rounded-lg disabled:opacity-50"
+                className="w-full sm:w-auto px-4 py-2 text-sm font-medium text-gray-600 hover:bg-gray-100 rounded-lg disabled:opacity-50"
                 disabled={bulkSubmitLoading}
               >
                 Cancel
@@ -2165,7 +2452,7 @@ const SiteManager: React.FC<SiteManagerProps> = ({ onUpdateSite, onViewSite, ref
               <button
                 onClick={handleBulkSubmit}
                 disabled={bulkSubmitLoading || bulkRows.filter((r) => r.siteName.trim()).length === 0}
-                className="bg-gray-900 text-white px-6 py-2.5 rounded-lg text-sm font-bold hover:bg-gray-800 disabled:opacity-50 flex items-center gap-2"
+                className="w-full sm:w-auto so-btn-primary px-6 py-2.5 rounded-lg text-sm font-bold disabled:opacity-50 flex items-center justify-center gap-2"
               >
                 {bulkSubmitLoading && <Loader2 className="animate-spin" size={14} />}
                 Add {bulkRows.filter((r) => r.siteName.trim()).length || 0} site{bulkRows.filter((r) => r.siteName.trim()).length !== 1 ? "s" : ""}

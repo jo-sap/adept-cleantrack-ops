@@ -202,7 +202,7 @@ const TeamManager: React.FC = () => {
               });
             }}
             disabled={formLoading}
-            className="inline-flex items-center gap-1.5 px-4 py-1.5 rounded-lg text-[11px] font-bold bg-gray-900 text-white hover:bg-gray-800 disabled:opacity-50"
+            className="inline-flex items-center gap-1.5 px-4 py-1.5 rounded-lg text-[11px] font-bold so-btn-primary disabled:opacity-50"
           >
             {formLoading && <Loader2 className="animate-spin" size={12} />}
             Save profile

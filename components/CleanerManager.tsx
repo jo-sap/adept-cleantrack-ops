@@ -497,16 +497,16 @@ const CleanerManager: React.FC<CleanerManagerProps> = ({ onCleanersRefresh }) =>
           <p className="text-gray-500 text-sm mt-1">Manage personnel, onboarding details, and banking records.</p>
         </div>
         {canManageCleaners && (
-          <div className="flex items-center gap-2 flex-shrink-0">
+          <div className="flex flex-col sm:flex-row sm:items-center gap-2 w-full sm:w-auto flex-shrink-0">
             <button
               onClick={handleOpenBulk}
-              className="bg-white text-gray-900 border border-[#edeef0] px-4 py-2 rounded-lg text-sm font-bold hover:bg-gray-50 transition-colors flex items-center gap-2"
+              className="w-full sm:w-auto justify-center so-btn-secondary px-4 py-2 rounded-lg text-sm font-bold transition-colors flex items-center gap-2"
             >
               <Layers size={16} /> Bulk Add
             </button>
             <button
               onClick={handleOpenAdd}
-              className="bg-gray-900 text-white px-4 py-2 rounded-lg text-sm font-bold hover:bg-gray-800 transition-colors flex items-center gap-2"
+              className="w-full sm:w-auto justify-center so-btn-primary px-4 py-2 rounded-lg text-sm font-bold transition-colors flex items-center gap-2"
             >
               <Plus size={16} /> New Worker
             </button>
@@ -567,7 +567,7 @@ const CleanerManager: React.FC<CleanerManagerProps> = ({ onCleanersRefresh }) =>
       </div>
 
       {canManageCleaners && selectedCleanerIds.length > 0 && (
-        <div className="sticky top-12 z-20 flex flex-wrap items-center gap-2 py-2 px-3 bg-amber-50 border border-amber-200 rounded-lg shadow-sm">
+        <div className="hidden md:flex sticky top-12 z-20 flex-wrap items-center gap-2 py-2 px-3 bg-amber-50 border border-amber-200 rounded-lg shadow-sm">
           <span className="text-sm font-medium text-amber-800">
             {selectedCleanerIds.length} selected
           </span>
@@ -710,19 +710,83 @@ const CleanerManager: React.FC<CleanerManagerProps> = ({ onCleanersRefresh }) =>
           {searchQuery.trim() ? "No workers match your search." : "No workers yet. Add one to get started."}
         </div>
       ) : (
-        <div className="border border-[#edeef0] rounded-lg bg-white shadow-sm overflow-hidden table-scroll-mobile">
-          <table className="w-full border-collapse text-left table-fixed min-w-[820px]">
+        <>
+        <div className="md:hidden space-y-2">
+          {sortedCleaners.map((cleaner) => {
+            const appCleaner = toAppCleaner(cleaner);
+            const assignments = assignmentsByCleanerId[cleaner.id] ?? [];
+            const assignedSiteCount = assignments.length;
+            return (
+              <div
+                key={cleaner.id}
+                className="border border-[#edeef0] rounded-lg bg-white px-3 py-3"
+              >
+                <div className="flex items-start justify-between gap-2">
+                  <div className="min-w-0 flex items-start gap-2">
+                    <div className="w-8 h-8 bg-gray-100 rounded-lg flex items-center justify-center text-gray-600 font-bold text-[11px] shrink-0">
+                      {appCleaner.firstName.charAt(0)}
+                      {appCleaner.lastName ? appCleaner.lastName.charAt(0) : ""}
+                    </div>
+                    <div className="min-w-0">
+                      <p className="text-sm font-semibold text-gray-900 break-words">
+                        {cleaner.cleanerName}
+                      </p>
+                      <p className="text-[11px] text-gray-500 mt-0.5">
+                        {(cleaner.type ?? "cleaner") === "contractor" ? "Contractor" : "Cleaner"}
+                        {" · "}
+                        {assignedSiteCount === 1 ? "1 site" : `${assignedSiteCount} sites`}
+                      </p>
+                    </div>
+                  </div>
+                  {canManageCleaners && (
+                    <div className="flex items-center gap-1 shrink-0">
+                      <button
+                        type="button"
+                        onClick={() => handleOpenEdit(cleaner)}
+                        className="touch-target p-2 rounded text-blue-600 hover:text-blue-800 hover:bg-blue-50 inline-flex items-center justify-center"
+                        aria-label={`Edit ${cleaner.cleanerName}`}
+                        title="Edit"
+                      >
+                        <Pencil size={18} />
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => handleToggleActive(cleaner)}
+                        className="touch-target p-2 rounded text-gray-600 hover:text-gray-900 hover:bg-gray-100 inline-flex items-center justify-center"
+                        aria-label={cleaner.active ? `Deactivate ${cleaner.cleanerName}` : `Activate ${cleaner.cleanerName}`}
+                        title={cleaner.active ? "Deactivate" : "Activate"}
+                      >
+                        {cleaner.active ? <UserMinus size={18} /> : <UserPlus size={18} />}
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => handleDeleteCleaner(cleaner)}
+                        className="touch-target p-2 rounded text-red-600 hover:text-red-800 hover:bg-red-50 inline-flex items-center justify-center"
+                        aria-label={`Delete ${cleaner.cleanerName}`}
+                        title="Delete"
+                      >
+                        <Trash2 size={18} />
+                      </button>
+                    </div>
+                  )}
+                </div>
+              </div>
+            );
+          })}
+        </div>
+        <div className="hidden md:block border border-[#edeef0] rounded-lg bg-white shadow-sm table-scroll-mobile">
+          <table className="w-full border-collapse text-left table-fixed min-w-[560px] md:min-w-[820px]">
             <colgroup>
               {canManageCleaners && <col style={{ width: '4%' }} />}
               <col style={{ width: canManageCleaners ? '5%' : '6%' }} />
-              <col style={{ width: canManageCleaners ? '20%' : '22%' }} />
-              <col style={{ width: '10%' }} />
-              <col style={{ width: '8%' }} />
-              <col style={{ width: '8%' }} />
+              <col style={{ width: canManageCleaners ? '28%' : '30%' }} />
+              <col style={{ width: '14%' }} />
+              <col style={{ width: '14%' }} />
+              <col style={{ width: '14%' }} />
               <col style={{ width: canManageCleaners ? '16%' : '18%' }} />
               <col style={{ width: '10%' }} />
-              <col style={{ width: '8%' }} />
-              <col style={{ width: '11%' }} />
+              <col style={{ width: '10%' }} />
+              <col style={{ width: '12%' }} />
               {canManageCleaners && <col style={{ width: '12%' }} />}
             </colgroup>
             <thead>
@@ -785,10 +849,10 @@ const CleanerManager: React.FC<CleanerManagerProps> = ({ onCleanersRefresh }) =>
                       ))}
                   </button>
                 </th>
-                <th className="px-1.5 py-1.5 text-[9px] font-bold text-gray-500 uppercase tracking-widest">Account name</th>
-                <th className="px-1.5 py-1.5 text-[9px] font-bold text-gray-500 uppercase tracking-widest">BSB</th>
-                <th className="px-1.5 py-1.5 text-[9px] font-bold text-gray-500 uppercase tracking-widest">Account no.</th>
-                <th className="px-1.5 py-1.5 text-[9px] font-bold text-gray-500 uppercase tracking-widest">Sites Assigned</th>
+                <th className="hidden md:table-cell px-1.5 py-1.5 text-[9px] font-bold text-gray-500 uppercase tracking-widest">Account name</th>
+                <th className="hidden md:table-cell px-1.5 py-1.5 text-[9px] font-bold text-gray-500 uppercase tracking-widest">BSB</th>
+                <th className="hidden md:table-cell px-1.5 py-1.5 text-[9px] font-bold text-gray-500 uppercase tracking-widest">Account no.</th>
+                <th className="hidden md:table-cell px-1.5 py-1.5 text-[9px] font-bold text-gray-500 uppercase tracking-widest">Sites Assigned</th>
                 {canManageCleaners && <th className="px-1.5 py-1.5 text-[9px] font-bold text-gray-500 uppercase tracking-widest text-right">Actions</th>}
               </tr>
             </thead>
@@ -824,8 +888,8 @@ const CleanerManager: React.FC<CleanerManagerProps> = ({ onCleanersRefresh }) =>
                         {appCleaner.lastName ? appCleaner.lastName.charAt(0) : ""}
                       </div>
                     </td>
-                    <td className="px-1.5 py-1.5">
-                      <span className="text-xs font-semibold text-gray-900 break-words">{cleaner.cleanerName}</span>
+                    <td className="px-1.5 py-1.5" title={cleaner.cleanerName}>
+                      <span className="block text-xs font-semibold text-gray-900 truncate">{cleaner.cleanerName}</span>
                     </td>
                     <td className="px-1.5 py-1.5">
                       {(() => {
@@ -852,16 +916,16 @@ const CleanerManager: React.FC<CleanerManagerProps> = ({ onCleanersRefresh }) =>
                     <td className="px-1.5 py-1.5">
                       <span className="text-[11px] font-semibold text-green-600">${Number(cleaner.payRatePerHour || 0).toFixed(2)}/hr</span>
                     </td>
-                    <td className="px-1.5 py-1.5 text-[11px] text-gray-600 break-words" title={cleaner.accountName || undefined}>
+                    <td className="hidden md:table-cell px-1.5 py-1.5 text-[11px] text-gray-600 break-words" title={cleaner.accountName || undefined}>
                       {cleaner.accountName || "—"}
                     </td>
-                    <td className="px-1.5 py-1.5 text-[11px] text-gray-600 font-mono">
+                    <td className="hidden md:table-cell px-1.5 py-1.5 text-[11px] text-gray-600 font-mono">
                       {cleaner.bsb || "—"}
                     </td>
-                    <td className="px-1.5 py-1.5 text-[11px] text-gray-600 font-mono">
+                    <td className="hidden md:table-cell px-1.5 py-1.5 text-[11px] text-gray-600 font-mono">
                       {cleaner.accountNumber || "—"}
                     </td>
-                    <td className="px-1.5 py-1.5">
+                    <td className="hidden md:table-cell px-1.5 py-1.5">
                       <div className="relative inline-block">
                         <button
                           type="button"
@@ -938,6 +1002,7 @@ const CleanerManager: React.FC<CleanerManagerProps> = ({ onCleanersRefresh }) =>
             </tbody>
           </table>
         </div>
+        </>
       )}
 
       {(isAdding || editingCleaner) && (
@@ -1067,7 +1132,7 @@ const CleanerManager: React.FC<CleanerManagerProps> = ({ onCleanersRefresh }) =>
               <button
                 type="submit"
                 disabled={submitLoading}
-                className="w-full bg-gray-900 text-white py-3 rounded-xl font-bold hover:bg-gray-800 transition-all shadow-lg active:scale-[0.98] disabled:opacity-50 flex items-center justify-center gap-2"
+                className="w-full so-btn-primary py-3 rounded-xl font-bold transition-all shadow-lg active:scale-[0.98] disabled:opacity-50 flex items-center justify-center gap-2"
               >
                 {submitLoading && <Loader2 className="animate-spin" size={18} />}
                 {editingCleaner ? "Save changes" : "Add Worker"}
@@ -1079,7 +1144,7 @@ const CleanerManager: React.FC<CleanerManagerProps> = ({ onCleanersRefresh }) =>
 
       {bulkModalOpen && (
         <div className="fixed inset-0 bg-gray-900/60 backdrop-blur-sm z-[100] flex items-center justify-center p-4">
-          <div className="bg-white w-full max-w-4xl rounded-2xl shadow-2xl overflow-hidden animate-slideUp">
+          <div className="bg-white w-full max-w-[96vw] sm:max-w-4xl rounded-2xl shadow-2xl overflow-hidden animate-slideUp">
             <div className="p-6 border-b border-[#edeef0] flex justify-between items-center bg-[#fcfcfb]">
               <div className="flex items-center gap-3">
                 <div className="w-8 h-8 bg-gray-900 rounded-lg flex items-center justify-center text-white">
@@ -1096,12 +1161,12 @@ const CleanerManager: React.FC<CleanerManagerProps> = ({ onCleanersRefresh }) =>
               </button>
             </div>
 
-            <div className="p-6 space-y-4">
+            <div className="p-4 sm:p-6 space-y-4">
               <p className="text-xs text-gray-500">
                 Enter multiple workers at once. Only rows with a name will be created.
               </p>
-              <div className="border border-[#edeef0] rounded-lg overflow-x-auto">
-                <table className="w-full text-left text-sm">
+              <div className="border border-[#edeef0] rounded-lg table-scroll-mobile">
+                <table className="w-full min-w-[820px] text-left text-sm">
                   <thead>
                     <tr className="bg-gray-50 border-b border-[#edeef0] text-[10px] font-bold text-gray-500 uppercase tracking-widest">
                       <th className="py-2 px-2 w-6"></th>
@@ -1201,11 +1266,11 @@ const CleanerManager: React.FC<CleanerManagerProps> = ({ onCleanersRefresh }) =>
                 + Add new line
               </button>
 
-              <div className="mt-4 flex justify-end gap-2">
+              <div className="mt-4 flex flex-col-reverse sm:flex-row sm:justify-end gap-2">
                 <button
                   type="button"
                   onClick={() => !bulkSubmitLoading && setBulkModalOpen(false)}
-                  className="px-4 py-2 text-sm font-medium text-gray-600 hover:bg-gray-100 rounded-lg"
+                  className="w-full sm:w-auto px-4 py-2 text-sm font-medium text-gray-600 hover:bg-gray-100 rounded-lg"
                   disabled={bulkSubmitLoading}
                 >
                   Cancel
@@ -1214,7 +1279,7 @@ const CleanerManager: React.FC<CleanerManagerProps> = ({ onCleanersRefresh }) =>
                   type="button"
                   onClick={handleBulkSubmit}
                   disabled={bulkSubmitLoading}
-                  className="bg-gray-900 text-white px-6 py-2.5 rounded-lg text-sm font-bold hover:bg-gray-800 disabled:opacity-50 flex items-center gap-2"
+                  className="w-full sm:w-auto so-btn-primary px-6 py-2.5 rounded-lg text-sm font-bold disabled:opacity-50 flex items-center justify-center gap-2"
                 >
                   {bulkSubmitLoading && <Loader2 className="animate-spin" size={14} />}
                   Add {bulkRows.filter((r) => r.cleanerName.trim() !== "").length} workers

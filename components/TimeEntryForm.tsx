@@ -909,8 +909,8 @@ const TimeEntryForm: React.FC<TimeEntryFormProps> = ({
             optionIds: options.map(o => o.id),
           });
           return (
-            <div className="flex flex-col md:flex-row md:items-end gap-3 border-b border-[#edeef0] pt-2 pb-2">
-              <div className="flex-1 max-w-xs">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 border-b border-[#edeef0] pt-2 pb-2">
+              <div className="min-w-0 sm:max-w-xs">
                 <label className="block text-[10px] font-bold text-gray-400 uppercase mb-1">
                   {adhocMode ? "Cleaner" : "Personnel"}
                 </label>
@@ -927,7 +927,7 @@ const TimeEntryForm: React.FC<TimeEntryFormProps> = ({
                   ))}
                 </select>
               </div>
-              <div className="flex-1 max-w-xs">
+              <div className="min-w-0 sm:max-w-xs">
                 <div className="mb-1 flex items-center justify-between gap-2">
                   <label className="block text-[10px] font-bold text-gray-400 uppercase">
                     {adHocLockedMode ? "Ad Hoc Job" : "Type"}
@@ -954,11 +954,11 @@ const TimeEntryForm: React.FC<TimeEntryFormProps> = ({
         })()}
 
         {selectedCleanerId ? (
-          <div className="space-y-6">
-            <div className="sticky top-0 z-30 bg-white border border-[#edeef0] rounded-xl px-4 py-3 shadow-sm flex items-center justify-between h-20">
-              <div className="grid grid-cols-4 divide-x divide-gray-100 flex-1">
+            <div className="space-y-4 sm:space-y-6">
+            <div className="sticky top-0 z-30 bg-white border border-[#edeef0] rounded-xl px-3 sm:px-4 py-3 shadow-sm flex flex-col gap-3">
+              <div className="grid grid-cols-2 sm:grid-cols-4 sm:divide-x divide-gray-100 gap-y-2 sm:gap-y-0">
                 {[(adhocJobId ? 'Scheduled' : 'Budget'), 'Actual', 'Variance', 'Est. Pay'].map((label, idx) => (
-                  <div key={label} className="px-6 flex flex-col justify-center">
+                  <div key={label} className="px-1 sm:px-6 flex flex-col justify-center">
                     <span className="text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-1.5">{label}</span>
                     <span className={`text-sm font-bold ${label === 'Variance' && summary && summary.variance > 0.1 ? 'text-red-600' : 'text-gray-900'}`}>
                       {idx === 0 ? (summary?.budgetDisplay ?? summary?.budgetTotal ?? 0).toFixed(1) + 'h' : idx === 1 ? summary?.actualTotal.toFixed(1) + 'h' : idx === 2 ? (summary!.variance > 0 ? '+' : '') + summary?.variance.toFixed(1) + 'h' : '$' + (summary?.estPay ?? 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
@@ -969,12 +969,12 @@ const TimeEntryForm: React.FC<TimeEntryFormProps> = ({
                   </div>
                 ))}
               </div>
-              <div className="flex items-center gap-3 pr-2">
+              <div className="grid grid-cols-2 sm:flex sm:items-center gap-2 sm:gap-3 sm:pr-2">
                 {!adhocJobId && (
                   <button
                     type="button"
                     onClick={handleAutoFill}
-                    className="flex flex-col items-center justify-center w-24 h-14 rounded-xl border border-[#edeef0] bg-white text-gray-700 hover:bg-gray-50 hover:border-gray-300 transition-all"
+                    className="flex flex-col items-center justify-center w-full sm:w-24 h-12 sm:h-14 rounded-xl border border-[#edeef0] bg-white text-gray-700 hover:bg-gray-50 hover:border-gray-300 transition-all"
                     title="Fill empty days with remaining plan hours"
                   >
                     <Zap size={12} className="opacity-70 mb-0.5" /><span className="text-[10px] font-bold uppercase">Auto fill</span>
@@ -997,7 +997,7 @@ const TimeEntryForm: React.FC<TimeEntryFormProps> = ({
                         setHasUnsavedChanges(true);
                       }
                     }}
-                    className="flex flex-col items-center justify-center w-24 h-14 rounded-xl border border-[#edeef0] bg-white text-gray-700 hover:bg-gray-50 hover:border-gray-300 transition-all"
+                    className="flex flex-col items-center justify-center w-full sm:w-24 h-12 sm:h-14 rounded-xl border border-[#edeef0] bg-white text-gray-700 hover:bg-gray-50 hover:border-gray-300 transition-all"
                     title="Fill empty days with scheduled hours"
                   >
                     <Zap size={12} className="opacity-70 mb-0.5" /><span className="text-[10px] font-bold uppercase">Fill</span>
@@ -1007,7 +1007,7 @@ const TimeEntryForm: React.FC<TimeEntryFormProps> = ({
                   type="button"
                   onClick={handleCopyPreviousFortnight}
                   disabled={saveLoading}
-                  className="flex flex-col items-center justify-center w-24 h-14 rounded-xl border border-[#edeef0] bg-white text-gray-700 hover:bg-gray-50 hover:border-gray-300 transition-all disabled:opacity-40"
+                  className="flex flex-col items-center justify-center w-full sm:w-24 h-12 sm:h-14 rounded-xl border border-[#edeef0] bg-white text-gray-700 hover:bg-gray-50 hover:border-gray-300 transition-all disabled:opacity-40"
                   title="Copy saved hours from the previous pay fortnight for this site and cleaner (same job type). Save to persist."
                 >
                   <Copy size={12} className="opacity-70 mb-0.5" />
@@ -1019,7 +1019,7 @@ const TimeEntryForm: React.FC<TimeEntryFormProps> = ({
                   type="button"
                   onClick={handleClearAll}
                   disabled={saveLoading}
-                  className="flex flex-col items-center justify-center w-24 h-14 rounded-xl border border-[#edeef0] bg-white text-gray-700 hover:bg-gray-50 hover:border-gray-300 transition-all disabled:opacity-40"
+                  className="flex flex-col items-center justify-center w-full sm:w-24 h-12 sm:h-14 rounded-xl border border-[#edeef0] bg-white text-gray-700 hover:bg-gray-50 hover:border-gray-300 transition-all disabled:opacity-40"
                   title="Clear all hours for this fortnight (not saved until Save)"
                 >
                   <Eraser size={12} className="opacity-70 mb-0.5" />
@@ -1028,7 +1028,7 @@ const TimeEntryForm: React.FC<TimeEntryFormProps> = ({
                 <button
                   onClick={handleSave}
                   disabled={!canSaveAnything || saveLoading}
-                  className={`flex flex-col items-center justify-center w-24 h-14 rounded-xl transition-all ${
+                  className={`flex flex-col items-center justify-center w-full sm:w-24 h-12 sm:h-14 rounded-xl transition-all ${
                     isSaved
                       ? 'bg-green-600 text-white'
                       : 'so-btn-primary disabled:opacity-40'
@@ -1044,7 +1044,7 @@ const TimeEntryForm: React.FC<TimeEntryFormProps> = ({
                 Monthly job – <strong>{activeSite.budgeted_hours_per_fortnight.toFixed(1)}h</strong> planned this period. Enter actual hours on the day(s) they worked and save.
               </p>
             )}
-            <div className="grid grid-cols-7 gap-2">
+            <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-7 gap-2">
               {dates.map((date, index) => {
                 const dateStr = format(date, 'yyyy-MM-dd');
                 const isAdHoc = !!adhocJobId;
@@ -1069,9 +1069,9 @@ const TimeEntryForm: React.FC<TimeEntryFormProps> = ({
                   !isAdHoc && sitePlan > 0 && remainingPlan <= 0 && existingForThisCleaner === 0;
                 const noServiceLabel = noServicePeriod?.label?.trim() || noServicePeriod?.reason?.trim() || "No Service";
                 return (
-                  <div key={dateStr} onClick={() => inputRefs.current[dateStr]?.focus()} className={`flex flex-col p-3 bg-white border rounded-xl cursor-pointer group relative overflow-hidden ${status.border} ${status.bg.replace('bg-', 'hover:bg-')}`}>
+                  <div key={dateStr} onClick={() => inputRefs.current[dateStr]?.focus()} className={`flex flex-col p-2.5 sm:p-3 bg-white border rounded-xl cursor-pointer group relative overflow-hidden ${status.border} ${status.bg.replace('bg-', 'hover:bg-')}`}>
                     <div className={`absolute top-2 right-2 w-1.5 h-1.5 rounded-full ${status.dot}`} />
-                    <div className="mb-2"><p className="text-[10px] font-bold text-gray-900 uppercase">{format(date, 'EEE')}</p><p className="text-[9px] font-medium text-gray-400">{format(date, 'MMM d')}</p></div>
+                    <div className="mb-1.5"><p className="text-[10px] font-bold text-gray-900 uppercase">{format(date, 'EEE')}</p><p className="text-[9px] font-medium text-gray-400">{format(date, 'MMM d')}</p></div>
                     <div className="mt-auto space-y-2">
                       <div className="flex justify-between items-center"><span className="text-[8px] font-bold text-gray-400">{isAdHoc ? "Scheduled" : "Plan"}</span><span className="text-[9px] font-bold text-gray-800">{planned.toFixed(1)}h</span></div>
                       <input

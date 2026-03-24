@@ -16,6 +16,7 @@ import { endOfMonth, format } from "date-fns";
 import { getPublicHolidaysInRange } from "../lib/publicHolidays";
 import { generateAdHocOccurrencesForRange } from "../lib/adhocSchedule";
 import { exportAdHocJobsToSpreadsheet } from "../services/exportService";
+import { AU_STATES } from "../lib/auStates";
 
 const STATUS_OPTIONS = ["Requested", "Approved", "Scheduled", "Completed", "Cancelled", "In Progress"];
 // Reuse the existing "Job Type" column as schedule semantics (minimal schema approach).
@@ -276,44 +277,20 @@ export default function AdHocJobsManager() {
           No ad hoc jobs match the filters. Create one to get started.
         </div>
       ) : (
-        <div className="border border-[#edeef0] rounded-lg bg-white shadow-sm overflow-x-auto">
-          <table className="w-full border-collapse text-left table-auto min-w-[1320px]">
-            <colgroup>
-              <col className="min-w-[140px]" />
-              <col className="min-w-[100px]" />
-              <col className="min-w-[100px]" />
-              <col className="min-w-[100px]" />
-              <col className="min-w-[160px]" />
-              <col className="min-w-[120px]" />
-              <col className="min-w-[88px]" />
-              <col className="min-w-[88px]" />
-              <col className="min-w-[88px]" />
-              <col className="min-w-[90px]" />
-              <col className="min-w-[88px]" />
-              <col className="min-w-[72px]" />
-              <col className="min-w-[72px]" />
-              <col className="min-w-[72px]" />
-              <col className="min-w-[72px]" />
-              <col className="w-20" />
-            </colgroup>
+        <div className="border border-[#edeef0] rounded-lg bg-white shadow-sm overflow-x-hidden">
+          <table className="w-full border-collapse text-left table-fixed">
             <thead>
               <tr className="bg-[#fcfcfb] border-b border-[#edeef0]">
-                <th className="px-3 py-2 text-[9px] font-bold text-gray-500 uppercase tracking-widest text-left">Job Name</th>
-                <th className="px-2 py-2 text-[9px] font-bold text-gray-500 uppercase tracking-widest hidden md:table-cell">Schedule Type</th>
-                <th className="px-2 py-2 text-[9px] font-bold text-gray-500 uppercase tracking-widest hidden lg:table-cell">Company</th>
-                <th className="px-2 py-2 text-[9px] font-bold text-gray-500 uppercase tracking-widest hidden lg:table-cell">Client</th>
-                <th className="px-2 py-2 text-[9px] font-bold text-gray-500 uppercase tracking-widest hidden md:table-cell">Site</th>
-                <th className="px-2 py-2 text-[9px] font-bold text-gray-500 uppercase tracking-widest hidden md:table-cell">Assigned Manager</th>
-                <th className="px-2 py-2 text-[9px] font-bold text-gray-500 uppercase tracking-widest">Requested</th>
-                <th className="px-2 py-2 text-[9px] font-bold text-gray-500 uppercase tracking-widest hidden lg:table-cell">Scheduled</th>
-                <th className="px-2 py-2 text-[9px] font-bold text-gray-500 uppercase tracking-widest hidden lg:table-cell">Completed</th>
-                <th className="px-2 py-2 text-[9px] font-bold text-gray-500 uppercase tracking-widest">Status</th>
-                <th className="px-2 py-2 text-[9px] font-bold text-gray-500 uppercase tracking-widest">Budgeted Hrs</th>
-                <th className="px-2 py-2 text-[9px] font-bold text-gray-500 uppercase tracking-widest hidden xl:table-cell">Charge</th>
-                <th className="px-2 py-2 text-[9px] font-bold text-gray-500 uppercase tracking-widest hidden xl:table-cell">Cost</th>
-                <th className="px-2 py-2 text-[9px] font-bold text-gray-500 uppercase tracking-widest hidden 2xl:table-cell">Gross Profit</th>
-                <th className="px-2 py-2 text-[9px] font-bold text-gray-500 uppercase tracking-widest">Proof</th>
-                <th className="px-2 py-2 text-[9px] font-bold text-gray-500 uppercase tracking-widest w-20">Actions</th>
+                <th className="w-[21%] px-2 py-2 text-[9px] font-bold text-gray-500 uppercase tracking-widest text-left">Job Name</th>
+                <th className="w-[10%] px-2 py-2 text-[9px] font-bold text-gray-500 uppercase tracking-widest">Schedule</th>
+                <th className="w-[15%] px-2 py-2 text-[9px] font-bold text-gray-500 uppercase tracking-widest">Manager</th>
+                <th className="w-[10%] px-2 py-2 text-[9px] font-bold text-gray-500 uppercase tracking-widest">Scheduled</th>
+                <th className="w-[10%] px-2 py-2 text-[9px] font-bold text-gray-500 uppercase tracking-widest">Completed</th>
+                <th className="w-[10%] px-2 py-2 text-[9px] font-bold text-gray-500 uppercase tracking-widest">Status</th>
+                <th className="w-[8%] px-2 py-2 text-[9px] font-bold text-gray-500 uppercase tracking-widest">Charge</th>
+                <th className="w-[7%] px-2 py-2 text-[9px] font-bold text-gray-500 uppercase tracking-widest">Cost</th>
+                <th className="w-[9%] px-2 py-2 text-[9px] font-bold text-gray-500 uppercase tracking-widest">GP</th>
+                <th className="w-[10%] px-2 py-2 text-[9px] font-bold text-gray-500 uppercase tracking-widest">Actions</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-[#edeef0]">
@@ -323,41 +300,28 @@ export default function AdHocJobsManager() {
                   (currentUserId &&
                     j.assignedManagerId &&
                     j.assignedManagerId === currentUserId);
-                const siteMatch = sites.find((s) => s.id === j.siteId);
-                const siteLabel =
-                  siteMatch?.siteName || siteMatch?.address || j.siteName || "—";
                 return (
                 <tr key={j.id} className="hover:bg-[#f7f6f3]">
-                  <td className="px-3 py-2 max-w-[200px]">
+                  <td className="px-2 py-2">
                     <button
                       type="button"
                       onClick={() => openEdit(j)}
-                      className="text-sm font-semibold text-gray-900 hover:underline text-left block truncate w-full"
+                      className="text-xs font-semibold text-gray-900 hover:underline text-left block truncate w-full"
                       title={j.jobName || "—"}
                     >
                       {j.jobName || "—"}
                     </button>
                   </td>
-                  <td className="px-2 py-2 text-xs text-gray-600 hidden md:table-cell">
+                  <td className="px-2 py-2 text-[11px] text-gray-600 truncate">
                     {scheduleTypeLabel(j.jobType)}
                   </td>
-                  <td className="px-2 py-2 text-xs text-gray-600 hidden md:table-cell max-w-[120px]" title={j.companyName || "—"}>
-                    <span className="block truncate">{j.companyName || "—"}</span>
-                  </td>
-                  <td className="px-2 py-2 text-xs text-gray-600 hidden md:table-cell max-w-[120px]" title={j.clientName || "—"}>
-                    <span className="block truncate">{j.clientName || "—"}</span>
-                  </td>
-                  <td className="px-2 py-2 text-xs text-gray-600 hidden md:table-cell max-w-[180px]" title={siteLabel}>
-                    <span className="block truncate">{siteLabel}</span>
-                  </td>
-                  <td className="px-2 py-2 text-xs text-gray-600 hidden md:table-cell max-w-[120px]" title={j.assignedManagerName || "—"}>
+                  <td className="px-2 py-2 text-[11px] text-gray-600" title={j.assignedManagerName || "—"}>
                     <span className="block truncate">{j.assignedManagerName || "—"}</span>
                   </td>
-                  <td className="px-2 py-2 text-xs text-gray-700">{j.requestedDate ? format(new Date(j.requestedDate), "dd MMM yyyy") : "—"}</td>
-                  <td className="px-2 py-2 text-xs text-gray-700 hidden md:table-cell">{j.scheduledDate ? format(new Date(j.scheduledDate), "dd MMM yyyy") : "—"}</td>
-                  <td className="px-2 py-2 text-xs text-gray-700 hidden md:table-cell">{j.completedDate ? format(new Date(j.completedDate), "dd MMM yyyy") : "—"}</td>
+                  <td className="px-2 py-2 text-[11px] text-gray-700">{j.scheduledDate ? format(new Date(j.scheduledDate), "dd/MM/yy") : "—"}</td>
+                  <td className="px-2 py-2 text-[11px] text-gray-700">{j.completedDate ? format(new Date(j.completedDate), "dd/MM/yy") : "—"}</td>
                   <td className="px-2 py-2">
-                    <span className={`text-xs font-bold px-1.5 py-0.5 rounded ${
+                    <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded ${
                       j.status === "Completed" ? "bg-green-100 text-green-800" :
                       j.status === "Scheduled" || j.status === "Approved" ? "bg-blue-100 text-blue-800" :
                       "bg-gray-100 text-gray-800"
@@ -365,48 +329,34 @@ export default function AdHocJobsManager() {
                       {j.status || "Requested"}
                     </span>
                   </td>
-                  <td className="px-2 py-2 text-xs font-medium text-gray-700">
-                    {j.budgetedHours != null ? `${j.budgetedHours}h` : "—"}
-                  </td>
-                  <td className="px-2 py-2 text-xs text-gray-700 hidden md:table-cell">
+                  <td className="px-2 py-2 text-[11px] text-gray-700">
                     {j.charge != null ? `$${Number(j.charge).toFixed(2)}` : "—"}
                   </td>
-                  <td className="px-2 py-2 text-xs text-gray-700 hidden md:table-cell">
+                  <td className="px-2 py-2 text-[11px] text-gray-700">
                     {j.cost != null ? `$${Number(j.cost).toFixed(2)}` : "—"}
                   </td>
-                  <td className="px-2 py-2 text-xs text-gray-700 hidden md:table-cell">
+                  <td className="px-2 py-2 text-[11px] text-gray-700">
                     {j.grossProfit != null ? `$${Number(j.grossProfit).toFixed(2)}` : "—"}
-                  </td>
-                  <td className="px-2 py-2">
-                    {j.approvalProofRequired && !j.approvalProofUploaded ? (
-                      <span className="inline-flex items-center gap-0.5 text-amber-600 text-xs" title="Approval proof missing">
-                        <AlertCircle size={14} /> Missing
-                      </span>
-                    ) : j.approvalProofUploaded ? (
-                      <span className="text-xs text-green-600">Yes</span>
-                    ) : (
-                      <span className="text-xs text-gray-400">—</span>
-                    )}
                   </td>
                   <td className="px-2 py-2">
                     <div className="flex items-center gap-1">
                       <button
                         type="button"
                         onClick={() => openEdit(j)}
-                        className="p-2 rounded text-blue-600 hover:bg-blue-50"
+                        className="p-1.5 rounded text-blue-600 hover:bg-blue-50"
                         aria-label={`Edit ${j.jobName}`}
                       >
-                        <Pencil size={16} />
+                        <Pencil size={14} />
                       </button>
                       {canDelete && (
                         <button
                           type="button"
                           onClick={() => handleDelete(j)}
-                          className="p-2 rounded text-red-600 hover:bg-red-50 disabled:opacity-40"
+                          className="p-1.5 rounded text-red-600 hover:bg-red-50 disabled:opacity-40"
                           aria-label={`Delete ${j.jobName}`}
                           disabled={rowDeletingId === j.id}
                         >
-                          <Trash2 size={16} />
+                          <Trash2 size={14} />
                         </button>
                       )}
                     </div>
@@ -425,8 +375,8 @@ export default function AdHocJobsManager() {
           managers={managers}
           currentUserId={currentUserId}
           onClose={closeModal}
-          onSaved={() => {
-            loadJobs();
+          onSaved={async () => {
+            await loadJobs();
             closeModal();
             showToast(editingJob ? "Job updated." : "Ad hoc job created.");
           }}
@@ -445,7 +395,7 @@ interface AdHocJobFormModalProps {
   managers: { id: string; fullName: string; email: string }[];
   currentUserId: string | null;
   onClose: () => void;
-  onSaved: () => void;
+  onSaved: () => Promise<void> | void;
   submitLoading: boolean;
   setSubmitLoading: (v: boolean) => void;
   isAdmin: boolean;
@@ -471,7 +421,8 @@ function AdHocJobFormModal({
     clientName: job?.clientName ?? "",
     siteId: job?.siteId ?? null,
     manualSiteName: job?.manualSiteName ?? "",
-    manualSiteAddress: (job as any)?.manualSiteAddress ?? "",
+    manualSiteAddress: job?.manualSiteAddress ?? "",
+    manualSiteState: job?.manualSiteState ?? "",
     assignedManagerId: job?.assignedManagerId ?? currentUserId ?? null,
     requestedByName: job?.requestedByName ?? "",
     requestedByEmail: job?.requestedByEmail ?? "",
@@ -508,11 +459,13 @@ function AdHocJobFormModal({
     grossProfit: job?.grossProfit ?? null,
     markupPercent: job?.markupPercent ?? null,
     gpPercent: job?.gpPercent ?? null,
+    approvalProofRequired: job?.approvalProofRequired ?? false,
     description: job?.description ?? "",
     approvalProofUploaded: job?.approvalProofUploaded ?? false,
     approvalReference: job?.approvalReference ?? "",
     notesForInformation: job?.notesForInformation ?? "",
     active: job?.active ?? true,
+    timesheetApplicable: job?.timesheetApplicable ?? true,
   });
   const [siteSearch, setSiteSearch] = useState<string>("");
   const [pasteMode, setPasteMode] = useState(false);
@@ -555,6 +508,8 @@ function AdHocJobFormModal({
         clientName: job.clientName ?? "",
         siteId: job.siteId ?? null,
         manualSiteName: job.manualSiteName ?? "",
+        manualSiteAddress: job.manualSiteAddress ?? "",
+        manualSiteState: job.manualSiteState ?? "",
         assignedManagerId: job.assignedManagerId ?? null,
         requestedByName: job.requestedByName ?? "",
         requestedByEmail: job.requestedByEmail ?? "",
@@ -591,11 +546,13 @@ function AdHocJobFormModal({
         grossProfit: job.grossProfit ?? null,
         markupPercent: job.markupPercent ?? null,
         gpPercent: job.gpPercent ?? null,
+        approvalProofRequired: job.approvalProofRequired ?? false,
         description: job.description ?? "",
         approvalProofUploaded: job.approvalProofUploaded ?? false,
         approvalReference: job.approvalReference ?? "",
         notesForInformation: job.notesForInformation ?? "",
         active: job.active ?? true,
+        timesheetApplicable: job.timesheetApplicable ?? true,
       });
       // load existing attachments for this job
       let cancelled = false;
@@ -767,6 +724,10 @@ function AdHocJobFormModal({
         alert("Site name is required for a new adhoc site.");
         return;
       }
+      if (!form.manualSiteState?.trim()) {
+        alert("State is required for a new adhoc site.");
+        return;
+      }
     }
     if (scheduleType === "Once Off") {
       if (!form.scheduledDate) {
@@ -852,7 +813,7 @@ function AdHocJobFormModal({
         await uploadAdHocJobAttachments(token, itemId, proofFiles);
         await updateAdHocJob(token, itemId, { approvalProofUploaded: true });
       }
-      onSaved();
+      await onSaved();
     } catch (err) {
       alert(err instanceof Error ? err.message : "Save failed.");
     } finally {
@@ -971,7 +932,12 @@ function AdHocJobFormModal({
                     checked={siteMode === "existing"}
                     onChange={() => {
                       setSiteMode("existing");
-                      setForm((f) => ({ ...f, manualSiteName: "", manualSiteAddress: f.manualSiteAddress }));
+                      setForm((f) => ({
+                        ...f,
+                        manualSiteName: "",
+                        manualSiteAddress: "",
+                        manualSiteState: "",
+                      }));
                     }}
                   />
                   <span className="text-gray-600">Existing site</span>
@@ -983,7 +949,10 @@ function AdHocJobFormModal({
                     checked={siteMode === "new"}
                     onChange={() => {
                       setSiteMode("new");
-                      setForm((f) => ({ ...f, siteId: null }));
+                      setForm((f) => ({
+                        ...f,
+                        siteId: null,
+                      }));
                     }}
                   />
                   <span className="text-gray-600">New adhoc site</span>
@@ -1013,7 +982,13 @@ function AdHocJobFormModal({
                             key={s.id}
                             type="button"
                             onClick={() => {
-                              setForm((f) => ({ ...f, siteId: s.id, manualSiteName: "", manualSiteAddress: "" }));
+                              setForm((f) => ({
+                                ...f,
+                                siteId: s.id,
+                                manualSiteName: "",
+                                manualSiteAddress: "",
+                                manualSiteState: "",
+                              }));
                               setSiteSearch(label);
                             }}
                             className="block w-full px-3 py-1.5 text-left text-sm text-gray-800 hover:bg-gray-100"
@@ -1026,31 +1001,44 @@ function AdHocJobFormModal({
                   )}
                 </div>
               ) : (
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                  <div>
-                    <input
-                      id="manualSiteName"
-                      type="text"
-                      value={form.manualSiteName ?? ""}
-                      onChange={(e) =>
-                        setForm((f) => ({ ...f, manualSiteName: e.target.value }))
-                      }
-                      placeholder="Site name"
-                      className="w-full border border-[#edeef0] rounded-lg px-3 py-2 text-sm"
-                    />
+                <div className="space-y-3">
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                    {field("Manual site name", "manualSiteName", (
+                      <input
+                        id="manualSiteName"
+                        type="text"
+                        value={form.manualSiteName ?? ""}
+                        onChange={(e) => setForm((f) => ({ ...f, manualSiteName: e.target.value }))}
+                        placeholder="Site name"
+                        className="w-full border border-[#edeef0] rounded-lg px-3 py-2 text-sm"
+                      />
+                    ))}
+                    {field("State", "manualSiteState", (
+                      <select
+                        id="manualSiteState"
+                        value={form.manualSiteState ?? ""}
+                        onChange={(e) => setForm((f) => ({ ...f, manualSiteState: e.target.value }))}
+                        className="w-full border border-[#edeef0] rounded-lg px-3 py-2 text-sm bg-white"
+                      >
+                        <option value="">Select state…</option>
+                        {AU_STATES.map((s) => (
+                          <option key={s} value={s}>
+                            {s}
+                          </option>
+                        ))}
+                      </select>
+                    ))}
                   </div>
-                  <div>
+                  {field("Manual site address", "manualSiteAddress", (
                     <input
                       id="manualSiteAddress"
                       type="text"
-                      value={(form as any).manualSiteAddress ?? ""}
-                      onChange={(e) =>
-                        setForm((f) => ({ ...(f as any), manualSiteAddress: e.target.value }))
-                      }
-                      placeholder="Site address"
+                      value={form.manualSiteAddress ?? ""}
+                      onChange={(e) => setForm((f) => ({ ...f, manualSiteAddress: e.target.value }))}
+                      placeholder="Street, suburb, postcode"
                       className="w-full border border-[#edeef0] rounded-lg px-3 py-2 text-sm"
                     />
-                  </div>
+                  ))}
                 </div>
               )}
             </div>
@@ -1689,12 +1677,13 @@ function AdHocJobFormModal({
           </div>
           <div className="flex flex-wrap gap-6">
             <label className="flex items-center gap-2">
-              <input type="checkbox" checked={form.approvalProofRequired ?? false} onChange={(e) => setForm((f) => ({ ...f, approvalProofRequired: e.target.checked }))} className="rounded border-gray-300" />
-              <span className="text-sm">Approval proof required</span>
-            </label>
-            <label className="flex items-center gap-2">
-              <input type="checkbox" checked={form.approvalProofUploaded ?? false} onChange={(e) => setForm((f) => ({ ...f, approvalProofUploaded: e.target.checked }))} className="rounded border-gray-300" />
-              <span className="text-sm">Approval proof uploaded (or upload files above)</span>
+              <input
+                type="checkbox"
+                checked={form.timesheetApplicable ?? true}
+                onChange={(e) => setForm((f) => ({ ...f, timesheetApplicable: e.target.checked }))}
+                className="rounded border-gray-300"
+              />
+              <span className="text-sm">Timesheet applicable (include in fortnight payroll timesheets)</span>
             </label>
             <label className="flex items-center gap-2">
               <input type="checkbox" checked={form.active ?? true} onChange={(e) => setForm((f) => ({ ...f, active: e.target.checked }))} className="rounded border-gray-300" />
@@ -1702,7 +1691,14 @@ function AdHocJobFormModal({
             </label>
           </div>
           {field("Approval reference notes", "proofNotes", (
-            <textarea id="proofNotes" value={form.approvalReferenceNotes ?? ""} onChange={(e) => setForm((f) => ({ ...f, approvalReferenceNotes: e.target.value }))} className="w-full border border-[#edeef0] rounded-lg px-3 py-2 text-sm" rows={2} placeholder="Reference to email / ticket" />
+            <textarea
+              id="proofNotes"
+              value={form.approvalReference ?? ""}
+              onChange={(e) => setForm((f) => ({ ...f, approvalReference: e.target.value }))}
+              className="w-full border border-[#edeef0] rounded-lg px-3 py-2 text-sm"
+              rows={2}
+              placeholder="Reference to email / ticket"
+            />
           ))}
           <div className="flex justify-end gap-2 pt-4 border-t border-[#edeef0]">
             <button type="button" onClick={onClose} className="px-4 py-2 rounded-lg border border-[#edeef0] text-gray-700 hover:bg-gray-50">Cancel</button>

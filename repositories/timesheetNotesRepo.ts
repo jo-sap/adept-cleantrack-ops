@@ -401,12 +401,27 @@ export async function upsertTimesheetPeriodNote(
   const normCleaner = input.cleanerId ? sharepoint.normalizeListItemId(input.cleanerId) : null;
   const inputSiteLabel = normalizeSiteLabelForNotes(input.siteName);
   const inputPeriod = comparablePeriodYmd(input.periodStartYmd);
+  const inputTagsNorm = (input.tags ?? []).map((t) => t.trim().toLowerCase()).filter(Boolean);
+  const inputAdhocTag = inputTagsNorm.find((t) => t.startsWith("adhocjob:")) ?? "";
 
   const all = await sharepoint.getListItems(accessToken, spSiteId, listId);
   const matches: sharepoint.GraphListItem[] = [];
   for (const item of all) {
     const n = parseItem(item, keys);
     if (!n) continue;
+    const noteTagsNorm = (n.tags ?? []).map((t) => t.trim().toLowerCase()).filter(Boolean);
+    if (inputAdhocTag) {
+      const tagMatch = noteTagsNorm.includes(inputAdhocTag);
+      const nameFallbackMatch =
+        !!inputSiteLabel &&
+        normalizeSiteLabelForNotes(n.siteLookupName) === inputSiteLabel;
+      if (!tagMatch && !nameFallbackMatch) continue;
+      if (comparablePeriodYmd(n.periodStartYmd) !== inputPeriod) continue;
+      const itemCleaner = n.cleanerId ?? null;
+      if (itemCleaner !== normCleaner) continue;
+      matches.push(item);
+      continue;
+    }
     const nSid = n.siteId ? sharepoint.normalizeListItemId(n.siteId) : "";
     const idMatch = !!normSite && !!nSid && nSid === normSite;
     const nameOnlyMatch =
@@ -440,13 +455,13 @@ export async function upsertTimesheetPeriodNote(
   const titleBase = `${input.siteName} — ${input.periodStartYmd}${normCleaner ? " (cleaner)" : ""}`;
   const title = titleBase.length > 255 ? titleBase.slice(0, 252) + "…" : titleBase;
 
-  const siteVal = lookupWriteValue(input.siteId);
-
   const baseFields: Record<string, unknown> = {
-    [keys.siteLookupKey]: siteVal,
     [keys.periodStartKey]: input.periodStartYmd,
     [keys.noteKey]: bodyStr,
   };
+  if (normSite) {
+    baseFields[keys.siteLookupKey] = lookupWriteValue(normSite);
+  }
 
   if (keys.titleKey) {
     baseFields[keys.titleKey] = title;

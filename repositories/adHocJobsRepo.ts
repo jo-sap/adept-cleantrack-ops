@@ -15,6 +15,65 @@ const AD_HOC_JOBS_LIST_NAME = "CleanTrack Ad Hoc Jobs";
 /** Temporary debug logs. Set to false to disable. */
 const DEBUG_ADHOC = true;
 
+/**
+ * Display titles the app uses for CleanTrack Ad Hoc Jobs. Wired in getFieldMap (case/spacing-insensitive)
+ * so Graph internal names resolve even when SharePoint titles differ slightly.
+ */
+const AD_HOC_DISPLAY_NAMES_FOR_WIRING: string[] = [
+  "Job Name",
+  "Job Type",
+  "Company Name",
+  "Client Name",
+  "Site",
+  "Assigned Manager",
+  "Manual Site Name",
+  "Manual Site Address",
+  "Manual Site State",
+  "Requested By Name",
+  "Requested By Email",
+  "Request Channel",
+  "Requested Date",
+  "Scheduled Date",
+  "Completed Date",
+  "Status",
+  "Budgeted Hours",
+  "Actual Hours",
+  "Service Provider",
+  "Charge Rate Per Hour",
+  "Cost Rate Per Hour",
+  "Charge",
+  "Cost",
+  "Gross Profit",
+  "Markup %",
+  "GP %",
+  "Description",
+  "Approval Method",
+  "Approval Proof Required",
+  "Approval Proof Uploaded",
+  "Approval Reference",
+  "Notes for Information",
+  "Active",
+  "Timesheet Applicable",
+  "Recurrence Frequency",
+  "Recurrence End Date",
+  "Hours Per Service Day",
+  "Weekday Hours",
+  "Recurrence Weekdays",
+  "Monthly Mode",
+  "Monthly Day Of Month",
+  "Monthly Week Of Month",
+  "Monthly Weekday",
+  "Monthly Hours",
+  "Weekday Charge Rate Override",
+  "Saturday Charge Rate Override",
+  "Sunday Charge Rate Override",
+  "Public Holiday Charge Rate Override",
+  "Weekday Cost Rate Override",
+  "Saturday Cost Rate Override",
+  "Sunday Cost Rate Override",
+  "Public Holiday Cost Rate Override",
+];
+
 export interface AdHocJobFilters {
   /** Filter by requested date month (year-month string "YYYY-MM"). */
   month?: string;
@@ -139,7 +198,16 @@ function getLookupValue(f: Record<string, unknown>, baseKey: string): string {
   return String(v).trim();
 }
 
-/** Build display name -> internal name map from list columns. */
+/** Normalize list column display labels for case/whitespace-insensitive matching. */
+function normalizeColumnLabel(displayName: string): string {
+  return displayName.trim().toLowerCase().replace(/\s+/g, " ");
+}
+
+/**
+ * Build display name -> internal name map from list columns.
+ * Resolves "Manual Site Name" / "Manual Site Address" even when SharePoint uses different
+ * display casing, alternate titles, or compact internal names (e.g. ManualSiteName vs Manual_x0020_...).
+ */
 async function getFieldMap(
   accessToken: string,
   siteId: string,
@@ -147,9 +215,94 @@ async function getFieldMap(
 ): Promise<Record<string, string>> {
   const columns = await sharepoint.getListColumns(accessToken, siteId, listId);
   const map: Record<string, string> = {};
+  const byNormDisplay = new Map<string, string>();
+
   for (const c of columns) {
-    if (c.displayName) map[c.displayName] = c.name;
+    if (!c.displayName || !c.name) continue;
+    map[c.displayName] = c.name;
+    const norm = normalizeColumnLabel(c.displayName);
+    if (!byNormDisplay.has(norm)) byNormDisplay.set(norm, c.name);
   }
+
+  const wireCanonical = (canonical: string, ...aliasDisplays: string[]) => {
+    if (map[canonical]) return;
+    for (const a of aliasDisplays) {
+      const internal = byNormDisplay.get(normalizeColumnLabel(a));
+      if (internal) {
+        map[canonical] = internal;
+        return;
+      }
+    }
+  };
+
+  wireCanonical(
+    "Manual Site Name",
+    "Manual Site Name",
+    "Manual site name",
+    "Unlisted Site Name",
+    "Manual Site",
+    "Site Name (Manual)"
+  );
+  wireCanonical(
+    "Manual Site Address",
+    "Manual Site Address",
+    "Manual site address",
+    "Unlisted Site Address",
+    "Site Address (Manual)"
+  );
+  wireCanonical("Manual Site State", "Manual Site State", "Manual site state", "Site State", "State");
+
+  if (!map["Manual Site Name"]) {
+    for (const c of columns) {
+      if (!c.name) continue;
+      const lower = c.name.toLowerCase().replace(/_x0020_/g, "");
+      if (
+        lower === "manualsitename" ||
+        lower === "manual_site_name" ||
+        (lower.includes("manual") && lower.includes("site") && lower.includes("name") && !lower.includes("address"))
+      ) {
+        map["Manual Site Name"] = c.name;
+        break;
+      }
+    }
+  }
+  if (!map["Manual Site Address"]) {
+    for (const c of columns) {
+      if (!c.name) continue;
+      const lower = c.name.toLowerCase().replace(/_x0020_/g, "");
+      if (
+        lower === "manualsiteaddress" ||
+        lower === "manual_site_address" ||
+        (lower.includes("manual") && lower.includes("site") && lower.includes("address"))
+      ) {
+        map["Manual Site Address"] = c.name;
+        break;
+      }
+    }
+  }
+  if (!map["Manual Site State"]) {
+    for (const c of columns) {
+      if (!c.name) continue;
+      const lower = c.name.toLowerCase().replace(/_x0020_/g, "");
+      if (
+        lower === "manualsitestate" ||
+        lower === "manual_site_state" ||
+        lower === "state" ||
+        (lower.includes("manual") && lower.includes("site") && lower.includes("state"))
+      ) {
+        map["Manual Site State"] = c.name;
+        break;
+      }
+    }
+  }
+
+  // List uses "Approval Reference Notes"; app field is approvalReference → "Approval Reference".
+  wireCanonical("Approval Reference", "Approval Reference", "Approval Reference Notes");
+
+  for (const label of AD_HOC_DISPLAY_NAMES_FOR_WIRING) {
+    wireCanonical(label, label);
+  }
+
   return map;
 }
 
@@ -175,8 +328,9 @@ function itemToAdHocJob(
   const jobTypeKey = map["Job Type"] ?? "Job_x0020_Type";
   const companyKey = map["Company Name"] ?? "Company_x0020_Name";
   const clientKey = map["Client Name"] ?? "Client_x0020_Name";
-  const manualSiteKey = map["Manual Site Name"] ?? "Manual_x0020_Site_x0020_Name";
-  const manualSiteAddressKey = map["Manual Site Address"] ?? "Manual_x0020_Site_x0020_Address";
+  const manualSiteKey = map["Manual Site Name"];
+  const manualSiteAddressKey = map["Manual Site Address"];
+  const manualSiteStateKey = map["Manual Site State"] ?? map["State"];
   const reqNameKey = map["Requested By Name"] ?? "Requested_x0020_By_x0020_Name";
   const reqEmailKey = map["Requested By Email"] ?? "Requested_x0020_By_x0020_Email";
   const channelKey = map["Request Channel"] ?? "Request_x0020_Channel";
@@ -195,10 +349,13 @@ function itemToAdHocJob(
   const markupKey = map["Markup %"] ?? "Markup_x0020__x0025_";
   const gpPctKey = map["GP %"] ?? "GP_x0020__x0025_";
   const descKey = map["Description"] ?? "Description";
+  const approvalMethodKey = map["Approval Method"];
+  const proofReqKey = map["Approval Proof Required"];
   const proofUpKey = map["Approval Proof Uploaded"] ?? "Approval_x0020_Proof_x0020_Uploaded";
   const approvalRefKey = map["Approval Reference"] ?? "Approval_x0020_Reference";
   const notesKey = map["Notes for Information"] ?? "Notes_x0020_for_x0020_Information";
   const activeKey = map["Active"] ?? "Active";
+  const timesheetApplicableKey = map["Timesheet Applicable"];
   const recurrenceFreqKey = map["Recurrence Frequency"] ?? "Recurrence_x0020_Frequency";
   const recurrenceEndKey = map["Recurrence End Date"] ?? "Recurrence_x0020_End_x0020_Date";
   const hoursPerDayKey = map["Hours Per Service Day"] ?? "Hours_x0020_Per_x0020_Service_x0020_Day";
@@ -227,8 +384,28 @@ function itemToAdHocJob(
     clientName: getStr(f, clientKey),
     siteId: siteId || null,
     siteName: siteName || "",
-    manualSiteName: getStr(f, manualSiteKey) || undefined,
-    manualSiteAddress: getStr(f, manualSiteAddressKey) || undefined,
+    manualSiteName:
+      getStr(
+        f,
+        ...(manualSiteKey ? [manualSiteKey] : []),
+        "Manual_x0020_Site_x0020_Name",
+        "ManualSiteName"
+      ) || undefined,
+    manualSiteAddress:
+      getStr(
+        f,
+        ...(manualSiteAddressKey ? [manualSiteAddressKey] : []),
+        "Manual_x0020_Site_x0020_Address",
+        "ManualSiteAddress"
+      ) || undefined,
+    manualSiteState:
+      getStr(
+        f,
+        ...(manualSiteStateKey ? [manualSiteStateKey] : []),
+        "Manual_x0020_Site_x0020_State",
+        "ManualSiteState",
+        "State"
+      ) || undefined,
     description: getStr(f, descKey),
     requestedByName: getStr(f, reqNameKey),
     requestedByEmail: getStr(f, reqEmailKey),
@@ -249,10 +426,19 @@ function itemToAdHocJob(
     grossProfit: toNum(f[gpKey] ?? f["GrossProfit"]),
     markupPercent: toNum(f[markupKey]),
     gpPercent: toNum(f[gpPctKey]),
+    approvalMethod: getStr(f, ...(approvalMethodKey ? [approvalMethodKey] : []), "ApprovalMethod") || undefined,
+    approvalProofRequired:
+      toBool(f[proofReqKey ?? "ApprovalProofRequired"]) ||
+      /^required$/i.test(getStr(f, ...(approvalMethodKey ? [approvalMethodKey] : []), "ApprovalMethod")),
     approvalProofUploaded: toBool(f[proofUpKey] ?? f["ApprovalProofUploaded"]),
     approvalReference: getStr(f, approvalRefKey),
     notesForInformation: getStr(f, notesKey),
     active: toBool(f[activeKey] ?? f["Active"]) !== false,
+    // Backward-compat: if column is missing, treat as applicable.
+    timesheetApplicable:
+      timesheetApplicableKey
+        ? toBool(f[timesheetApplicableKey] ?? f["TimesheetApplicable"])
+        : true,
     recurrenceFrequency: (getStr(f, recurrenceFreqKey) as any) || null,
     recurrenceStartDate: toDateStr(f[schedKey] ?? f["ScheduledDate"]),
     recurrenceEndDate: toDateStr(f[recurrenceEndKey]),
@@ -341,6 +527,7 @@ export interface AdHocJobPayload {
   siteId?: string | null;
   manualSiteName?: string;
   manualSiteAddress?: string;
+  manualSiteState?: string;
   assignedManagerId?: string | null;
   requestedByName?: string;
   requestedByEmail?: string;
@@ -383,10 +570,13 @@ export interface AdHocJobPayload {
   grossProfit?: number | null;
   markupPercent?: number | null;
   gpPercent?: number | null;
+  approvalProofRequired?: boolean;
   approvalProofUploaded?: boolean;
+  approvalMethod?: string;
   approvalReference?: string;
   notesForInformation?: string;
   active?: boolean;
+  timesheetApplicable?: boolean;
 }
 
 export interface AdHocAttachment {
@@ -417,14 +607,16 @@ function payloadToFields(
     const num = /^\d+$/.test(payload.siteId) ? parseInt(payload.siteId, 10) : payload.siteId;
     fields[siteLookupKey] = num;
   }
-  // Manual/unlisted site (do not auto-create a Site).
-  if (payload.manualSiteName !== undefined) {
-    const k = map["Manual Site Name"] ?? "Manual_x0020_Site_x0020_Name";
-    if (k) fields[k] = payload.manualSiteName ?? "";
+  // Manual/unlisted site — only send if the list has a resolved column (wrong internal names 400).
+  if (payload.manualSiteName !== undefined && map["Manual Site Name"]) {
+    fields[map["Manual Site Name"]] = payload.manualSiteName ?? "";
   }
-  if (payload.manualSiteAddress !== undefined) {
-    const k = map["Manual Site Address"] ?? "Manual_x0020_Site_x0020_Address";
-    if (k) fields[k] = payload.manualSiteAddress ?? "";
+  if (payload.manualSiteAddress !== undefined && map["Manual Site Address"]) {
+    fields[map["Manual Site Address"]] = payload.manualSiteAddress ?? "";
+  }
+  const manualSiteStateWriteKey = map["Manual Site State"] ?? map["State"];
+  if (payload.manualSiteState !== undefined && manualSiteStateWriteKey) {
+    fields[manualSiteStateWriteKey] = payload.manualSiteState ?? "";
   }
 
   const mgrInternal = map["Assigned Manager"] ?? "Assigned_x0020_Manager";
@@ -438,6 +630,12 @@ function payloadToFields(
     const k = map[displayName] ?? internalFallback;
     if (k && value !== undefined) fields[k] = value;
   };
+  /** Only write if this list has the column (Graph 400 if internal name is wrong). */
+  const setIfMapped = (displayName: string, value: unknown) => {
+    const k = map[displayName];
+    if (!k || value === undefined) return;
+    fields[k] = value;
+  };
   set("Requested By Name", "Requested_x0020_By_x0020_Name", payload.requestedByName ?? "");
   set("Requested By Email", "Requested_x0020_By_x0020_Email", payload.requestedByEmail ?? "");
   set("Request Channel", "Request_x0020_Channel", payload.requestChannel ?? "");
@@ -446,33 +644,32 @@ function payloadToFields(
   set("Completed Date", "Completed_x0020_Date", payload.completedDate ?? null);
   set("Status", "Status", payload.status ?? "Requested");
   set("Budgeted Hours", "Budgeted_x0020_Hours", payload.budgetedHours ?? null);
-  // Recurrence fields (optional; safe no-ops if SharePoint columns do not exist).
-  set("Recurrence Frequency", "Recurrence_x0020_Frequency", payload.recurrenceFrequency ?? null);
-  // We reuse Scheduled Date as the commencement/start date for recurring jobs.
-  set("Recurrence End Date", "Recurrence_x0020_End_x0020_Date", payload.recurrenceEndDate ?? null);
-  set("Hours Per Service Day", "Hours_x0020_Per_x0020_Service_x0020_Day", payload.hoursPerServiceDay ?? null);
+  // Schedule / recurrence / overrides — only if columns exist (this tenant may omit or use different internals).
+  setIfMapped("Recurrence Frequency", payload.recurrenceFrequency ?? null);
+  setIfMapped("Recurrence End Date", payload.recurrenceEndDate ?? null);
+  setIfMapped("Hours Per Service Day", payload.hoursPerServiceDay ?? null);
   if (payload.weekdayHours !== undefined) {
-    const k = map["Weekday Hours"] ?? "Weekday_x0020_Hours";
+    const k = map["Weekday Hours"];
     if (k) fields[k] = payload.weekdayHours ? JSON.stringify(payload.weekdayHours) : "";
   }
   if (payload.recurrenceWeekdays !== undefined) {
-    const k = map["Recurrence Weekdays"] ?? "Recurrence_x0020_Weekdays";
+    const k = map["Recurrence Weekdays"];
     if (k) fields[k] = payload.recurrenceWeekdays ? payload.recurrenceWeekdays.join(",") : "";
   }
-  set("Monthly Mode", "Monthly_x0020_Mode", payload.monthlyMode ?? null);
-  set("Monthly Day Of Month", "Monthly_x0020_Day_x0020_Of_x0020_Month", payload.monthlyDayOfMonth ?? null);
-  set("Monthly Week Of Month", "Monthly_x0020_Week_x0020_Of_x0020_Month", payload.monthlyWeekOfMonth ?? null);
-  set("Monthly Weekday", "Monthly_x0020_Weekday", payload.monthlyWeekday ?? null);
-  set("Monthly Hours", "Monthly_x0020_Hours", payload.monthlyHours ?? null);
+  setIfMapped("Monthly Mode", payload.monthlyMode ?? null);
+  setIfMapped("Monthly Day Of Month", payload.monthlyDayOfMonth ?? null);
+  setIfMapped("Monthly Week Of Month", payload.monthlyWeekOfMonth ?? null);
+  setIfMapped("Monthly Weekday", payload.monthlyWeekday ?? null);
+  setIfMapped("Monthly Hours", payload.monthlyHours ?? null);
 
-  set("Weekday Charge Rate Override", "Weekday_x0020_Charge_x0020_Rate_x0020_Override", payload.weekdayChargeRateOverride ?? null);
-  set("Saturday Charge Rate Override", "Saturday_x0020_Charge_x0020_Rate_x0020_Override", payload.saturdayChargeRateOverride ?? null);
-  set("Sunday Charge Rate Override", "Sunday_x0020_Charge_x0020_Rate_x0020_Override", payload.sundayChargeRateOverride ?? null);
-  set("Public Holiday Charge Rate Override", "Public_x0020_Holiday_x0020_Charge_x0020_Rate_x0020_Override", payload.publicHolidayChargeRateOverride ?? null);
-  set("Weekday Cost Rate Override", "Weekday_x0020_Cost_x0020_Rate_x0020_Override", payload.weekdayCostRateOverride ?? null);
-  set("Saturday Cost Rate Override", "Saturday_x0020_Cost_x0020_Rate_x0020_Override", payload.saturdayCostRateOverride ?? null);
-  set("Sunday Cost Rate Override", "Sunday_x0020_Cost_x0020_Rate_x0020_Override", payload.sundayCostRateOverride ?? null);
-  set("Public Holiday Cost Rate Override", "Public_x0020_Holiday_x0020_Cost_x0020_Rate_x0020_Override", payload.publicHolidayCostRateOverride ?? null);
+  setIfMapped("Weekday Charge Rate Override", payload.weekdayChargeRateOverride ?? null);
+  setIfMapped("Saturday Charge Rate Override", payload.saturdayChargeRateOverride ?? null);
+  setIfMapped("Sunday Charge Rate Override", payload.sundayChargeRateOverride ?? null);
+  setIfMapped("Public Holiday Charge Rate Override", payload.publicHolidayChargeRateOverride ?? null);
+  setIfMapped("Weekday Cost Rate Override", payload.weekdayCostRateOverride ?? null);
+  setIfMapped("Saturday Cost Rate Override", payload.saturdayCostRateOverride ?? null);
+  setIfMapped("Sunday Cost Rate Override", payload.sundayCostRateOverride ?? null);
+  setIfMapped("Public Holiday Cost Rate Override", payload.publicHolidayCostRateOverride ?? null);
   set("Description", "Description", payload.description ?? "");
   set("Actual Hours", "Actual_x0020_Hours", payload.actualHours ?? null);
   set("Service Provider", "Service_x0020_Provider", payload.serviceProvider ?? "");
@@ -483,6 +680,15 @@ function payloadToFields(
   set("Gross Profit", "Gross_x0020_Profit", payload.grossProfit ?? null);
   set("Markup %", "Markup_x0020__x0025_", payload.markupPercent ?? null);
   set("GP %", "GP_x0020__x0025_", payload.gpPercent ?? null);
+  if (payload.approvalProofRequired !== undefined) {
+    setIfMapped("Approval Proof Required", payload.approvalProofRequired);
+    if (!map["Approval Proof Required"] && map["Approval Method"] && payload.approvalMethod === undefined) {
+      fields[map["Approval Method"]] = payload.approvalProofRequired ? "Required" : "Not Required";
+    }
+  }
+  if (payload.approvalMethod !== undefined) {
+    setIfMapped("Approval Method", payload.approvalMethod ?? "");
+  }
   set("Approval Proof Uploaded", "Approval_x0020_Proof_x0020_Uploaded", payload.approvalProofUploaded ?? false);
   // Only send Approval Reference if we have a trusted internal name from SharePoint;
   // avoid hard-coded fallback that may not exist.
@@ -491,6 +697,9 @@ function payloadToFields(
   }
   set("Notes for Information", "Notes_x0020_for_x0020_Information", payload.notesForInformation ?? "");
   set("Active", "Active", payload.active !== false);
+  if (payload.timesheetApplicable !== undefined) {
+    setIfMapped("Timesheet Applicable", payload.timesheetApplicable);
+  }
   return fields;
 }
 
@@ -514,11 +723,21 @@ export async function createAdHocJob(
   const full: AdHocJobPayload = {
     status: "Requested",
     active: true,
+    timesheetApplicable: true,
     ...payload,
   };
   const fields = payloadToFields(full, map);
 
   if (DEBUG_ADHOC) {
+    if (full.manualSiteName?.trim() && !map["Manual Site Name"]) {
+      console.warn("[CleanTrack Ad Hoc Jobs] No list column resolved for Manual Site Name; value not sent.");
+    }
+    if (full.manualSiteAddress?.trim() && !map["Manual Site Address"]) {
+      console.warn("[CleanTrack Ad Hoc Jobs] No list column resolved for Manual Site Address; value not sent.");
+    }
+    if (full.manualSiteState?.trim() && !(map["Manual Site State"] || map["State"])) {
+      console.warn("[CleanTrack Ad Hoc Jobs] No list column resolved for Manual Site State; value not sent.");
+    }
     console.log("[CleanTrack Ad Hoc Jobs] create payload fields:", JSON.stringify(fields, null, 2));
   }
 
@@ -622,11 +841,19 @@ export async function getAdHocJobAttachments(
   const items: Array<{ FileName?: string; ServerRelativeUrl?: string }> =
     json.value ??
     (json.d && Array.isArray(json.d.results) ? json.d.results : []);
+  const siteOrigin = (() => {
+    try {
+      return new URL(webUrl).origin;
+    } catch {
+      return webUrl;
+    }
+  })();
   return items
     .filter((x) => x.FileName && x.ServerRelativeUrl)
     .map((x) => ({
       fileName: x.FileName as string,
-      url: `${webUrl}${x.ServerRelativeUrl}`,
+      // ServerRelativeUrl already starts with /sites/... ; joining with webUrl duplicates path and 404s.
+      url: `${siteOrigin}${x.ServerRelativeUrl}`,
     }));
 }
 

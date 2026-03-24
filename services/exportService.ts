@@ -44,6 +44,8 @@ export const exportAdHocJobsToSpreadsheet = (jobs: AdHocJob[], monthLabel: strin
     'Company',
     'Client',
     'Site',
+    'Manual Site Address',
+    'Manual Site State',
     'Assigned Manager',
     'Requested',
     'Scheduled',
@@ -102,6 +104,8 @@ export const exportAdHocJobsToSpreadsheet = (jobs: AdHocJob[], monthLabel: strin
     j.companyName ?? '',
     j.clientName ?? '',
     j.siteName || j.manualSiteName || '',
+    j.manualSiteAddress ?? '',
+    j.manualSiteState ?? '',
     j.assignedManagerName ?? '',
     j.requestedDate ? format(new Date(j.requestedDate), 'dd MMM yyyy') : '',
     j.scheduledDate ? format(new Date(j.scheduledDate), 'dd MMM yyyy') : '',
@@ -142,7 +146,8 @@ export const exportFortnightTimesheets = (
   cleaners: Cleaner[],
   entries: TimeEntry[],
   formatType: 'xlsx' | 'csv' = 'xlsx',
-  siteNotesLookup?: SiteNotesExportLookup
+  siteNotesLookup?: SiteNotesExportLookup,
+  adHocJobs: AdHocJob[] = []
 ) => {
   const dates: Date[] = [];
   for (let i = 0; i < 14; i++) {
@@ -156,6 +161,9 @@ export const exportFortnightTimesheets = (
     'Cleaner Name',
     ...dateHeaders,
     'Total Hours',
+    'Contract Hours',
+    'Ad Hoc Hours',
+    'Ad Hoc Jobs',
     'Hourly rate',
     'Total Payment',
     'Account Name',
@@ -167,59 +175,97 @@ export const exportFortnightTimesheets = (
   const rows: any[][] = [];
   const periodStartStr = format(period.startDate, 'yyyy-MM-dd');
   const periodEndStr = format(period.endDate, 'yyyy-MM-dd');
+  const periodEntries = entries.filter(
+    (e) =>
+      !!e.cleanerId &&
+      e.date >= periodStartStr &&
+      e.date <= periodEndStr
+  );
+  const siteById = new Map(sites.map((s) => [s.id, s] as const));
+  const cleanerById = new Map(cleaners.map((c) => [c.id, c] as const));
+  const adHocById = new Map(adHocJobs.map((j) => [String(j.id), j] as const));
+  const grouped = new Map<string, TimeEntry[]>();
+  periodEntries.forEach((e) => {
+    const siteKey = e.siteId ? String(e.siteId) : '__NO_SITE__';
+    const unlinkedAdhocKey =
+      siteKey === '__NO_SITE__' && e.adhocJobId ? String(e.adhocJobId) : '__NA__';
+    const key = `${siteKey}|${String(e.cleanerId)}|${unlinkedAdhocKey}`;
+    if (!grouped.has(key)) grouped.set(key, []);
+    grouped.get(key)!.push(e);
+  });
 
-  sites.forEach(site => {
-    site.assigned_cleaner_ids.forEach(cleanerId => {
-      const cleaner = cleaners.find(c => c.id === cleanerId);
-      if (!cleaner) return;
+  const groupKeys = Array.from(grouped.keys()).sort((a, b) => a.localeCompare(b));
+  groupKeys.forEach((key) => {
+    const group = grouped.get(key) ?? [];
+    if (group.length === 0) return;
+    const [siteId, cleanerId] = key.split('|');
+    const cleaner = cleanerById.get(cleanerId);
+    if (!cleaner) return;
+    const site = siteId && siteId !== '__NO_SITE__' ? siteById.get(siteId) : undefined;
+    const firstAdHocId = group.find((e) => !!e.adhocJobId)?.adhocJobId;
+    const adHocJob = firstAdHocId ? adHocById.get(String(firstAdHocId)) : undefined;
+    const derivedSiteName =
+      site?.name ??
+      adHocJob?.manualSiteName?.trim() ??
+      adHocJob?.siteName?.trim() ??
+      adHocJob?.jobName?.trim() ??
+      'Ad Hoc (Unlinked Site)';
+    const derivedSiteAddress =
+      site?.address ??
+      [adHocJob?.manualSiteAddress?.trim(), adHocJob?.manualSiteState?.trim()]
+        .filter(Boolean)
+        .join(', ');
 
-      const cleanerEntries = entries.filter(
-        (e) =>
-          e.siteId === site.id &&
-          e.cleanerId === cleanerId &&
-          e.date >= periodStartStr &&
-          e.date <= periodEndStr
-      );
+    const row: any[] = [
+      derivedSiteName,
+      derivedSiteAddress,
+      `${cleaner.firstName} ${cleaner.lastName}`
+    ];
 
-      if (cleanerEntries.length === 0) return;
+    let totalHours = 0;
+    let contractHours = 0;
+    let adHocHours = 0;
+    let totalPayment = 0;
+    const adHocJobNames = new Set<string>();
 
-      const row: any[] = [
-        site.name,
-        site.address,
-        `${cleaner.firstName} ${cleaner.lastName}`
-      ];
+    dates.forEach((date) => {
+      const dateStr = format(date, 'yyyy-MM-dd');
+      const dayEntries = group.filter((e) => e.date === dateStr);
+      const dayHours = dayEntries.reduce((sum, e) => sum + e.hours, 0);
 
-      let totalHours = 0;
-      let totalPayment = 0;
+      row.push(dayHours > 0 ? dayHours : '');
+      totalHours += dayHours;
 
-      dates.forEach(date => {
-        const dateStr = format(date, 'yyyy-MM-dd');
-        const dayEntries = cleanerEntries.filter(e => e.date === dateStr);
-        const dayHours = dayEntries.reduce((sum, e) => sum + e.hours, 0);
-
-        row.push(dayHours > 0 ? dayHours : '');
-        totalHours += dayHours;
-
-        dayEntries.forEach(e => {
-          const rate = e.pay_rate_snapshot || site.cleaner_rates[cleanerId] || cleaner.payRatePerHour || 0;
-          totalPayment += e.hours * rate;
-        });
+      dayEntries.forEach((e) => {
+        if (e.adhocJobId) {
+          adHocHours += e.hours;
+          const label =
+            e.adhocJobName?.trim() ||
+            (e.adhocJobId ? `Ad Hoc Job #${e.adhocJobId}` : '');
+          if (label) adHocJobNames.add(label);
+        } else {
+          contractHours += e.hours;
+        }
+        const rate =
+          e.pay_rate_snapshot ||
+          (site ? site.cleaner_rates[cleanerId] : 0) ||
+          cleaner.payRatePerHour ||
+          0;
+        totalPayment += e.hours * rate;
       });
-
-      row.push(totalHours);
-      row.push(
-        totalHours > 0 ? `$${(totalPayment / totalHours).toFixed(2)}` : ''
-      );
-      row.push(`$${totalPayment.toFixed(2)}`);
-      row.push(cleaner.bankAccountName || '');
-      row.push(cleaner.bankBsb || '');
-      row.push(cleaner.bankAccountNumber || '');
-
-      const note = managerNoteForSite(site, siteNotesLookup);
-      row.push(note);
-
-      rows.push(row);
     });
+
+    row.push(totalHours);
+    row.push(contractHours > 0 ? contractHours : '');
+    row.push(adHocHours > 0 ? adHocHours : '');
+    row.push(adHocJobNames.size ? Array.from(adHocJobNames).join(', ') : '');
+    row.push(totalHours > 0 ? `$${(totalPayment / totalHours).toFixed(2)}` : '');
+    row.push(`$${totalPayment.toFixed(2)}`);
+    row.push(cleaner.bankAccountName || '');
+    row.push(cleaner.bankBsb || '');
+    row.push(cleaner.bankAccountNumber || '');
+    row.push(site ? managerNoteForSite(site, siteNotesLookup) : '');
+    rows.push(row);
   });
 
   if (rows.length === 0) {

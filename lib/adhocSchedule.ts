@@ -270,3 +270,15 @@ export function occurrencesToHoursByDate(occ: AdHocOccurrence[]): Record<string,
   return map;
 }
 
+/** True if the job has at least one planned occurrence in the inclusive date range (once-off or recurring). */
+export function adHocJobHasPlannedWorkInRange(
+  job: AdHocJob,
+  rangeStart: Date,
+  rangeEnd: Date,
+  publicHolidayDates?: Set<string>
+): boolean {
+  return (
+    generateAdHocOccurrencesForRange(job, rangeStart, rangeEnd, publicHolidayDates).length > 0
+  );
+}
+

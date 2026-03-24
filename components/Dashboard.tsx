@@ -114,6 +114,7 @@ const Dashboard: React.FC<DashboardProps> = ({ sites, cleaners, entries, current
         }
         const jobs = await getAdHocJobs(token, filters);
         if (cancelled) return;
+
         const completed = jobs.filter((j) => j.status === "Completed").length;
         const pending = jobs.filter((j) => j.status !== "Completed" && j.status !== "Cancelled").length;
         const budgetedHours = jobs.reduce((s, j) => s + (j.budgetedHours ?? 0), 0);
@@ -136,7 +137,9 @@ const Dashboard: React.FC<DashboardProps> = ({ sites, cleaners, entries, current
         if (!cancelled) setAdHocStats(null);
       }
     });
-    return () => { cancelled = true; };
+    return () => {
+      cancelled = true;
+    };
   }, [currentPeriod.startDate, isAdmin, user?.email]);
 
   type RecapSortKey = 'name' | 'volume' | 'variance' | 'budget' | 'cleaner';

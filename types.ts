@@ -92,6 +92,8 @@ export interface AdHocJob {
   manualSiteName?: string;
   /** Optional address for manual/unlisted site. */
   manualSiteAddress?: string;
+  /** Australian state/territory code for manual/unlisted site (e.g. NSW). */
+  manualSiteState?: string;
   description: string;
   requestedByName: string;
   requestedByEmail: string;
@@ -112,10 +114,16 @@ export interface AdHocJob {
   grossProfit: number | null;
   markupPercent: number | null;
   gpPercent: number | null;
+  /** Optional flag indicating evidence is required before approval. */
+  approvalProofRequired?: boolean;
   approvalProofUploaded: boolean;
+  /** Optional workflow/method label from SharePoint (if configured). */
+  approvalMethod?: string;
   approvalReference: string;
   notesForInformation: string;
   active: boolean;
+  /** Whether this ad hoc job should appear in Timesheets for payroll entry/approval. */
+  timesheetApplicable?: boolean;
 
   /** Recurring schedule fields (optional; only used when Schedule Type = Recurring). */
   recurrenceFrequency?: 'Weekly' | 'Fortnightly' | 'Monthly' | null;

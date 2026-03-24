@@ -88,7 +88,7 @@ const AppContent: FC = () => {
         cleaners.map((c) => [`${c.firstName} ${c.lastName}`.trim().toLowerCase(), c] as const)
       ) as Map<string, Cleaner>;
 
-      if (!siteById.has(siteId) && (e.siteName ?? '').trim()) {
+      if ((!siteId || !siteById.has(siteId)) && (e.siteName ?? '').trim()) {
         const s = siteByName.get((e.siteName ?? '').trim().toLowerCase());
         if (s) siteId = s.id;
       }
@@ -280,7 +280,19 @@ const AppContent: FC = () => {
 
     switch (currentView) {
       case 'dashboard':
-        return <Dashboard sites={sites} cleaners={cleaners} entries={entries as any} currentPeriod={currentPeriod} onViewSite={id => { setViewBeforeSiteDetail('dashboard'); setSelectedSiteId(id); setCurrentView('site-detail'); }} />;
+        return (
+          <Dashboard
+            sites={sites}
+            cleaners={cleaners}
+            entries={entries as any}
+            currentPeriod={currentPeriod}
+            onViewSite={(id) => {
+              setViewBeforeSiteDetail('dashboard');
+              setSelectedSiteId(id);
+              setCurrentView('site-detail');
+            }}
+          />
+        );
       case 'timesheets':
         return <TimeEntryForm sites={sites} cleaners={cleaners} entries={entries as any} currentPeriod={currentPeriod} onSaveBatch={handleSaveBatchEntries} onDeleteEntry={() => {}} onUpdateSite={fetchSites} />;
       case 'sites':

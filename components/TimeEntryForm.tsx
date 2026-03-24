@@ -3,11 +3,13 @@ import React, { useState, useMemo, useEffect, useRef, useCallback } from 'react'
 import { Site, Cleaner, TimeEntry, FortnightPeriod, AdHocJob } from '../types';
 import { format, getDay, addDays } from 'date-fns';
 import { useRole } from '../contexts/RoleContext';
+import { useAppAuth } from '../contexts/AppAuthContext';
+import { getCleanTrackUserByEmail } from '../repositories/usersRepo';
 import { getDayStatus } from '../utils';
 import { getSiteRateForDate, computeBudgetedLabourCostForRange } from '../lib/budgetedLabourCost';
 import { getPublicHolidaysInRange } from '../lib/publicHolidays';
 import { getNoServicePeriodForDate } from '../lib/noServicePeriods';
-import { Save, Zap, Building, ArrowLeft, UserPlus, TrendingUp, TrendingDown, Check, Download, FileSpreadsheet, Search, Loader2, Eraser, Copy } from 'lucide-react';
+import { Save, Zap, Building, ArrowLeft, UserPlus, TrendingUp, TrendingDown, Check, Download, FileSpreadsheet, Search, Loader2, Eraser, Copy, Briefcase } from 'lucide-react';
 import { exportFortnightTimesheets } from '../services/exportService';
 import { getGraphAccessToken } from '../lib/graph';
 import { getAdHocJobs } from '../repositories/adHocJobsRepo';
@@ -16,9 +18,11 @@ import {
   upsertTimesheetPeriodNote,
   pickSiteNoteForPeriod,
   buildSiteNotesExportLookup,
+  normalizeSiteLabelForNotes,
+  comparablePeriodYmd,
   type SiteNotesExportLookup,
 } from '../repositories/timesheetNotesRepo';
-import { generateAdHocOccurrencesForRange, occurrencesToHoursByDate } from '../lib/adhocSchedule';
+import { generateAdHocOccurrencesForRange, occurrencesToHoursByDate, adHocJobHasPlannedWorkInRange } from '../lib/adhocSchedule';
 import TimesheetPeriodNotesPanel from './TimesheetPeriodNotesPanel';
 
 interface TimeEntryFormProps {
@@ -31,7 +35,7 @@ interface TimeEntryFormProps {
   onUpdateSite?: (site: Site) => void;
 }
 
-type QueueKey = 'all' | 'needs-hours' | 'incomplete' | 'over-budget' | 'completed';
+type QueueKey = 'all' | 'needs-hours' | 'incomplete' | 'over-budget' | 'completed' | 'adhoc';
 
 function normalizeScheduleType(raw: string | undefined | null): 'once_off' | 'recurring' {
   const s = String(raw ?? '').trim().toLowerCase();
@@ -44,6 +48,7 @@ const TimeEntryForm: React.FC<TimeEntryFormProps> = ({
   sites, cleaners, entries, currentPeriod, onSaveBatch, onUpdateSite
 }) => {
   const { isAdmin, isManager } = useRole();
+  const { user: authUser } = useAppAuth();
   const [activeSiteId, setActiveSiteId] = useState<string | null>(null);
   const [selectedCleanerId, setSelectedCleanerId] = useState<string>('');
   const [draftHours, setDraftHours] = useState<Record<string, number>>({});
@@ -52,8 +57,10 @@ const TimeEntryForm: React.FC<TimeEntryFormProps> = ({
   const [siteSearchQuery, setSiteSearchQuery] = useState('');
   const [saveLoading, setSaveLoading] = useState(false);
   const [adhocJobId, setAdhocJobId] = useState<string | null>(null);
+  const [activeAdHocCardJobId, setActiveAdHocCardJobId] = useState<string | null>(null);
   const [adHocJobsForSite, setAdHocJobsForSite] = useState<AdHocJob[]>([]);
   const [queueKey, setQueueKey] = useState<QueueKey>('all');
+  const [fortnightAdHocJobs, setFortnightAdHocJobs] = useState<AdHocJob[]>([]);
   const [managerNoteBody, setManagerNoteBody] = useState('');
   const [managerNoteSavedBody, setManagerNoteSavedBody] = useState('');
   const [notesListLoading, setNotesListLoading] = useState(false);
@@ -62,7 +69,32 @@ const TimeEntryForm: React.FC<TimeEntryFormProps> = ({
 
   const inputRefs = useRef<Record<string, HTMLInputElement | null>>({});
 
-  const activeSite = sites.find(s => s.id === activeSiteId);
+  const isVirtualAdHocContext = !!activeSiteId && activeSiteId.startsWith("adhoc:");
+  const virtualAdHocSite = useMemo(() => {
+    if (!activeSiteId || !activeSiteId.startsWith("adhoc:")) return null;
+    const jobId = activeSiteId.slice("adhoc:".length);
+    const job =
+      fortnightAdHocJobs.find((j) => j.id === jobId) ??
+      adHocJobsForSite.find((j) => j.id === jobId);
+    if (!job) return null;
+    const address = [job.manualSiteAddress?.trim(), job.manualSiteState?.trim()]
+      .filter(Boolean)
+      .join(", ");
+    return {
+      id: activeSiteId,
+      name: job.manualSiteName?.trim() || job.jobName || "Ad Hoc Site",
+      address,
+      is_active: true,
+      budgeted_hours_per_fortnight: 0,
+      daily_budgets: [0, 0, 0, 0, 0, 0, 0],
+      assigned_cleaner_ids: cleaners.map((c) => c.id),
+      monthly_revenue: 0,
+      financial_budget: 0,
+      cleaner_rates: {},
+      visit_frequency: "Ad Hoc",
+    } as Site;
+  }, [activeSiteId, fortnightAdHocJobs, adHocJobsForSite, cleaners]);
+  const activeSite = sites.find((s) => s.id === activeSiteId) ?? virtualAdHocSite ?? undefined;
   const activeCleaner = cleaners.find(c => c.id === selectedCleanerId);
 
   const managerNoteDirty = useMemo(
@@ -145,9 +177,51 @@ const TimeEntryForm: React.FC<TimeEntryFormProps> = ({
     [currentPeriod]
   );
 
+  useEffect(() => {
+    let cancelled = false;
+    getGraphAccessToken().then(async (token) => {
+      if (!token || cancelled) return;
+      try {
+        const filters: { assignedManagerId?: string } = {};
+        if (isManager && authUser?.email) {
+          const ctUser = await getCleanTrackUserByEmail(token, authUser.email);
+          if (ctUser?.id) filters.assignedManagerId = ctUser.id;
+        }
+        const all = await getAdHocJobs(
+          token,
+          Object.keys(filters).length > 0 ? filters : undefined
+        );
+        if (cancelled) return;
+        const eligible = all.filter((j) => {
+          if (j.timesheetApplicable === false) return false;
+          return adHocJobHasPlannedWorkInRange(j, currentPeriod.startDate, currentPeriod.endDate, phInPeriod);
+        });
+        eligible.sort((a, b) =>
+          (a.jobName || "").localeCompare(b.jobName || "", undefined, { sensitivity: "base" })
+        );
+        setFortnightAdHocJobs(eligible);
+      } catch {
+        if (!cancelled) setFortnightAdHocJobs([]);
+      }
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    currentPeriod.startDate,
+    currentPeriod.endDate,
+    phInPeriod,
+    isManager,
+    authUser?.email,
+  ]);
+
   const activeAdHocJob = useMemo(
-    () => (adhocJobId ? adHocJobsForSite.find((j) => j.id === adhocJobId) : undefined),
-    [adhocJobId, adHocJobsForSite]
+    () =>
+      adhocJobId
+        ? adHocJobsForSite.find((j) => j.id === adhocJobId) ??
+          fortnightAdHocJobs.find((j) => j.id === adhocJobId)
+        : undefined,
+    [adhocJobId, adHocJobsForSite, fortnightAdHocJobs]
   );
 
   const activeAdHocOccurrences = useMemo(() => {
@@ -222,6 +296,61 @@ const TimeEntryForm: React.FC<TimeEntryFormProps> = ({
     );
   }, [filteredSites, estimatedBudgetBySiteId]);
 
+  /** Labour cost from timesheet hours entered against ad hoc jobs this fortnight (hours × pay snapshot). */
+  const adHocLabourPaidFortnight = useMemo(() => {
+    const start = currentPeriod.startDate;
+    const endExclusive = addDays(currentPeriod.endDate, 1);
+    let sum = 0;
+    entries.forEach((e) => {
+      if (!e.adhocJobId) return;
+      const d = new Date(e.date);
+      if (d >= start && d < endExclusive) {
+        sum += e.hours * (e.pay_rate_snapshot ?? 0);
+      }
+    });
+    return sum;
+  }, [entries, currentPeriod.startDate, currentPeriod.endDate]);
+
+  const portfolioBudgetWithAdHoc = useMemo(
+    () => totalEstimatedBudget + adHocLabourPaidFortnight,
+    [totalEstimatedBudget, adHocLabourPaidFortnight]
+  );
+
+  const adHocSummaryById = useMemo(() => {
+    const map: Record<
+      string,
+      { plannedHours: number; plannedCost: number; loggedHours: number; loggedCost: number; variance: number }
+    > = {};
+    const start = currentPeriod.startDate;
+    const endExclusive = addDays(currentPeriod.endDate, 1);
+
+    fortnightAdHocJobs.forEach((job) => {
+      const occ = generateAdHocOccurrencesForRange(job, currentPeriod.startDate, currentPeriod.endDate, phInPeriod);
+      const plannedHours = occ.reduce((s, o) => s + o.hours, 0);
+      const plannedCost = occ.reduce((s, o) => s + o.costTotal, 0);
+
+      let loggedHours = 0;
+      let loggedCost = 0;
+      entries.forEach((e) => {
+        if (e.adhocJobId !== job.id) return;
+        const d = new Date(e.date);
+        if (d < start || d >= endExclusive) return;
+        loggedHours += e.hours;
+        loggedCost += e.hours * (e.pay_rate_snapshot ?? 0);
+      });
+
+      map[job.id] = {
+        plannedHours,
+        plannedCost,
+        loggedHours,
+        loggedCost,
+        variance: loggedHours - plannedHours,
+      };
+    });
+
+    return map;
+  }, [fortnightAdHocJobs, currentPeriod.startDate, currentPeriod.endDate, phInPeriod, entries]);
+
   const queueCounts = useMemo(() => {
     let needs = 0;
     let incomplete = 0;
@@ -248,10 +377,23 @@ const TimeEntryForm: React.FC<TimeEntryFormProps> = ({
       incomplete,
       over,
       completed,
+      adhoc: fortnightAdHocJobs.length,
     };
-  }, [filteredSites, siteSummaryById]);
+  }, [filteredSites, siteSummaryById, fortnightAdHocJobs.length]);
 
   const orderedSites = useMemo(() => {
+    if (queueKey === 'adhoc') {
+      const siteHasAdHoc = (siteId: string) =>
+        fortnightAdHocJobs.some(
+          (j) => j.siteId && String(j.siteId).trim() === String(siteId).trim()
+        );
+      return [...filteredSites].sort((a, b) => {
+        const ah = siteHasAdHoc(a.id) ? 0 : 1;
+        const bh = siteHasAdHoc(b.id) ? 0 : 1;
+        if (ah !== bh) return ah - bh;
+        return (a.name || "").localeCompare(b.name || "", undefined, { sensitivity: "base" });
+      });
+    }
     if (queueKey === 'all') return filteredSites;
     const classify = (siteId: string): QueueKey => {
       const summary = siteSummaryById[siteId];
@@ -269,7 +411,7 @@ const TimeEntryForm: React.FC<TimeEntryFormProps> = ({
       const bMatch = classify(b.id) === queueKey ? 0 : 1;
       return aMatch - bMatch;
     });
-  }, [filteredSites, queueKey, siteSummaryById]);
+  }, [filteredSites, queueKey, siteSummaryById, fortnightAdHocJobs]);
 
   const siteEntriesByDate = useMemo(() => {
     if (!activeSiteId) return {} as Record<string, Record<string, number>>;
@@ -289,21 +431,25 @@ const TimeEntryForm: React.FC<TimeEntryFormProps> = ({
     if (!activeSiteId || !adhocJobId) return {} as Record<string, Record<string, number>>;
     const map: Record<string, Record<string, number>> = {};
     entries.forEach((e) => {
-      if (e.siteId !== activeSiteId || !e.cleanerId) return;
+      if (!e.cleanerId) return;
+      if (!isVirtualAdHocContext && e.siteId !== activeSiteId) return;
       if (!e.adhocJobId || e.adhocJobId !== adhocJobId) return;
       const key = e.date;
       if (!map[key]) map[key] = {};
       map[key][e.cleanerId] = (map[key][e.cleanerId] || 0) + e.hours;
     });
     return map;
-  }, [entries, activeSiteId, adhocJobId]);
+  }, [entries, activeSiteId, adhocJobId, isVirtualAdHocContext]);
 
   useEffect(() => {
     if (!activeSiteId || !activeSite) {
       setSelectedCleanerId('');
       return;
     }
-    const personnelIds = activeSite.assigned_cleaner_ids ?? [];
+    const adhocMode = !!activeAdHocCardJobId;
+    const personnelIds = adhocMode
+      ? cleaners.map((c) => c.id)
+      : (activeSite.assigned_cleaner_ids ?? []);
     if (personnelIds.length === 0) {
       setSelectedCleanerId('');
       return;
@@ -313,11 +459,20 @@ const TimeEntryForm: React.FC<TimeEntryFormProps> = ({
       if (prev && personnelIds.includes(prev)) return prev;
       return firstId;
     });
-  }, [activeSiteId, activeSite]);
+  }, [activeSiteId, activeSite, activeAdHocCardJobId, cleaners]);
 
-  // When changing site/cleaner, default to contract entries when available; otherwise pick the first ad hoc job used.
+  // For standard site timesheets, always stay on contract work.
+  // Ad hoc context is only entered from the dedicated ad hoc job cards.
   useEffect(() => {
     if (!activeSiteId || !selectedCleanerId) return;
+    if (isVirtualAdHocContext) {
+      setAdhocJobId(activeAdHocCardJobId ?? adhocJobId);
+      return;
+    }
+    if (!activeAdHocCardJobId) {
+      setAdhocJobId(null);
+      return;
+    }
     const dateKeys = new Set(dates.map((d) => format(d, 'yyyy-MM-dd')));
     const inPeriod = entries.filter(
       (e) =>
@@ -332,7 +487,7 @@ const TimeEntryForm: React.FC<TimeEntryFormProps> = ({
     }
     const firstAdhoc = inPeriod.find((e) => !!e.adhocJobId);
     setAdhocJobId(firstAdhoc?.adhocJobId ?? null);
-  }, [activeSiteId, selectedCleanerId, currentPeriod.id, entries, dates]);
+  }, [activeSiteId, selectedCleanerId, currentPeriod.id, entries, dates, isVirtualAdHocContext, activeAdHocCardJobId, adhocJobId]);
 
   // Load draft hours for the current (site, cleaner, ad hoc context) selection.
   useEffect(() => {
@@ -342,7 +497,7 @@ const TimeEntryForm: React.FC<TimeEntryFormProps> = ({
       const dateStr = format(date, 'yyyy-MM-dd');
       const existing = entries.find(
         (e) =>
-          e.siteId === activeSiteId &&
+          (isVirtualAdHocContext ? true : e.siteId === activeSiteId) &&
           e.cleanerId === selectedCleanerId &&
           e.date === dateStr &&
           (adhocJobId ? e.adhocJobId === adhocJobId : !e.adhocJobId)
@@ -351,11 +506,17 @@ const TimeEntryForm: React.FC<TimeEntryFormProps> = ({
     });
     setDraftHours(newDraft);
     setHasUnsavedChanges(false);
-  }, [activeSiteId, selectedCleanerId, adhocJobId, currentPeriod.id, entries, dates]);
+  }, [activeSiteId, selectedCleanerId, adhocJobId, currentPeriod.id, entries, dates, isVirtualAdHocContext]);
 
   useEffect(() => {
     if (!activeSiteId) {
       setAdHocJobsForSite([]);
+      return;
+    }
+    if (isVirtualAdHocContext) {
+      const jobId = activeSiteId.slice("adhoc:".length);
+      const picked = fortnightAdHocJobs.find((j) => j.id === jobId);
+      setAdHocJobsForSite(picked ? [picked] : []);
       return;
     }
     let cancelled = false;
@@ -378,7 +539,7 @@ const TimeEntryForm: React.FC<TimeEntryFormProps> = ({
       }
     });
     return () => { cancelled = true; };
-  }, [activeSiteId, currentPeriod.startDate.getTime(), currentPeriod.endDate.getTime()]);
+  }, [activeSiteId, currentPeriod.startDate.getTime(), currentPeriod.endDate.getTime(), isVirtualAdHocContext, fortnightAdHocJobs]);
 
   useEffect(() => {
     if (!(isAdmin || isManager) || !activeSiteId || !activeSite) {
@@ -401,7 +562,18 @@ const TimeEntryForm: React.FC<TimeEntryFormProps> = ({
           await listAllTimesheetPeriodNotes(token);
         if (cancelled) return;
         const periodYmd = format(currentPeriod.startDate, "yyyy-MM-dd");
-        const picked = pickSiteNoteForPeriod(notes, activeSiteId, periodYmd, activeSite?.name);
+        const adhocTag = adhocJobId ? `adhocJob:${adhocJobId}` : "";
+        const adhocNameNorm = normalizeSiteLabelForNotes(activeAdHocJob?.jobName ?? "");
+        const picked = adhocTag
+          ? notes.find((n) =>
+              !n.cleanerId &&
+              comparablePeriodYmd(n.periodStartYmd) === periodYmd &&
+              (
+                (n.tags ?? []).some((t) => t.trim().toLowerCase() === adhocTag.toLowerCase()) ||
+                (!!adhocNameNorm && normalizeSiteLabelForNotes(n.siteLookupName) === adhocNameNorm)
+              )
+            )
+          : pickSiteNoteForPeriod(notes, activeSiteId, periodYmd, activeSite?.name);
         const body = picked?.noteBody ?? "";
         setManagerNoteBody(body);
         setManagerNoteSavedBody(body);
@@ -419,7 +591,7 @@ const TimeEntryForm: React.FC<TimeEntryFormProps> = ({
     return () => {
       cancelled = true;
     };
-  }, [isAdmin, isManager, activeSiteId, activeSite, currentPeriod.id, currentPeriod.startDate]);
+  }, [isAdmin, isManager, activeSiteId, activeSite, currentPeriod.id, currentPeriod.startDate, adhocJobId]);
 
   const handleHourChange = (dateStr: string, val: string) => {
     // Allow quarter‑hour (and other 2‑decimal) precision like 4.75
@@ -431,13 +603,17 @@ const TimeEntryForm: React.FC<TimeEntryFormProps> = ({
   const handleSave = async () => {
     if (!activeSiteId || !selectedCleanerId || !activeCleaner || !activeSite) return;
     if (!hasUnsavedChanges && !managerNoteDirty) return;
+    if (adhocJobId && managerNoteBody.trim() === "") {
+      alert("Manager Notes are required for Ad Hoc timesheets.");
+      return;
+    }
     const hoursWereDirty = hasUnsavedChanges;
     setSaveLoading(true);
     try {
       let anySuccess = false;
       if (hoursWereDirty) {
         const batchData = (Object.entries(draftHours) as [string, number][]).map(([date, hours]) => ({
-          siteId: activeSiteId,
+          siteId: isVirtualAdHocContext ? undefined : activeSiteId,
           cleanerId: selectedCleanerId,
           date,
           hours,
@@ -457,12 +633,13 @@ const TimeEntryForm: React.FC<TimeEntryFormProps> = ({
           alert("Sign in with Microsoft to save the manager note.");
         } else {
           const periodYmd = format(currentPeriod.startDate, "yyyy-MM-dd");
+          const adhocTag = adhocJobId ? `adhocJob:${adhocJobId}` : "";
           const noteResult = await upsertTimesheetPeriodNote(token, {
-            siteId: activeSiteId,
-            siteName: activeSite.name ?? "",
+            siteId: isVirtualAdHocContext ? "" : activeSiteId,
+            siteName: activeAdHocJob?.jobName ?? activeSite.name ?? "",
             periodStartYmd: periodYmd,
             cleanerId: null,
-            tags: [],
+            tags: adhocTag ? [adhocTag] : [],
             noteBody: managerNoteBody,
           });
           if (!noteResult.ok) {
@@ -553,7 +730,7 @@ const TimeEntryForm: React.FC<TimeEntryFormProps> = ({
   const handleCopyPreviousFortnight = () => {
     if (!activeSiteId || !selectedCleanerId) return;
     const matchesContext = (e: TimeEntry) =>
-      e.siteId === activeSiteId &&
+      (isVirtualAdHocContext ? true : e.siteId === activeSiteId) &&
       e.cleanerId === selectedCleanerId &&
       (adhocJobId ? e.adhocJobId === adhocJobId : !e.adhocJobId);
 
@@ -709,7 +886,11 @@ const TimeEntryForm: React.FC<TimeEntryFormProps> = ({
         <div className="flex justify-between items-start">
           <div className="flex flex-col gap-3">
             <button
-              onClick={() => setActiveSiteId(null)}
+              onClick={() => {
+                setActiveSiteId(null);
+                setActiveAdHocCardJobId(null);
+                setAdhocJobId(null);
+              }}
               className="flex items-center gap-2 text-xs text-gray-500 hover:text-gray-900 group w-fit"
             >
               <ArrowLeft size={14} /> Back
@@ -732,8 +913,12 @@ const TimeEntryForm: React.FC<TimeEntryFormProps> = ({
         </div>
 
         {(() => {
-          const personnelIds = activeSite.assigned_cleaner_ids ?? [];
-          if (personnelIds.length === 0) {
+          const adhocMode = !!activeAdHocCardJobId;
+          const adHocLockedMode = !!activeAdHocCardJobId;
+          const personnelIds = adhocMode
+            ? cleaners.map((c) => c.id)
+            : (activeSite.assigned_cleaner_ids ?? []);
+          if (!adhocMode && personnelIds.length === 0) {
             return (
               <div className="py-2">
                 <p className="text-xs text-gray-400">
@@ -754,7 +939,7 @@ const TimeEntryForm: React.FC<TimeEntryFormProps> = ({
             <div className="flex flex-col md:flex-row md:items-end gap-3 border-b border-[#edeef0] pt-2 pb-2">
               <div className="flex-1 max-w-xs">
                 <label className="block text-[10px] font-bold text-gray-400 uppercase mb-1">
-                  Personnel
+                  {adhocMode ? "Cleaner" : "Personnel"}
                 </label>
                 <select
                   value={selectedCleanerId}
@@ -770,58 +955,24 @@ const TimeEntryForm: React.FC<TimeEntryFormProps> = ({
                 </select>
               </div>
               <div className="flex-1 max-w-xs">
-                <label className="block text-[10px] font-bold text-gray-400 uppercase mb-1">
-                  Ad Hoc Job <span className="text-gray-400 font-normal">(optional)</span>
-                </label>
-                <select
-                  value={adhocJobId ?? ""}
-                  onChange={(e) => { setAdhocJobId(e.target.value || null); }}
-                  className="w-full so-input bg-white px-3 py-2 text-sm"
-                >
-                  <option value="">Contract / standard work</option>
-                  {adHocJobsForSite.map((j) => {
-                    const schedule = normalizeScheduleType(j.jobType);
-                    const tag = schedule === 'recurring' ? 'RECURRING' : 'ONCE OFF';
-                    return (
-                      <option key={j.id} value={j.id}>
-                        {j.jobName}{j.scheduledDate ? ` • ${j.scheduledDate}` : ''} • {tag}
-                      </option>
-                    );
-                  })}
-                </select>
-                {activeAdHocJob && (
-                  <div className="mt-1 flex items-center gap-2">
-                    <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-bold uppercase bg-gray-900 text-white">
-                      ADHOC
+                <div className="mb-1 flex items-center justify-between gap-2">
+                  <label className="block text-[10px] font-bold text-gray-400 uppercase">
+                    {adHocLockedMode ? "Ad Hoc Job" : "Type"}
+                  </label>
+                  {activeAdHocJob && (
+                    <span className="text-[10px] font-semibold uppercase tracking-wide text-gray-500">
+                      {normalizeScheduleType(activeAdHocJob.jobType) === 'recurring' ? 'Recurring' : 'Once off'}
                     </span>
-                    <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-bold uppercase bg-gray-100 text-gray-700">
-                      {normalizeScheduleType(activeAdHocJob.jobType) === 'recurring' ? 'RECURRING' : 'ONCE OFF'}
-                    </span>
+                  )}
+                </div>
+                {adHocLockedMode ? (
+                  <div className="w-full so-input bg-gray-50 px-3 py-2 text-sm text-gray-800 border border-[#edeef0] rounded-lg">
+                    {activeAdHocJob?.jobName ?? "Ad hoc job"}
+                    {activeAdHocJob?.scheduledDate ? ` • ${activeAdHocJob.scheduledDate}` : ""}
                   </div>
-                )}
-                {!activeAdHocJob && adHocJobsForSite.length > 0 && (
-                  <div className="mt-1 space-y-1">
-                    <p className="text-[11px] text-gray-500">
-                      {adHocJobsForSite.length} ad hoc job{adHocJobsForSite.length === 1 ? "" : "s"} scheduled for this pay period.
-                    </p>
-                    <div className="flex flex-wrap gap-1.5">
-                      {adHocJobsForSite.slice(0, 3).map((j) => (
-                        <button
-                          key={j.id}
-                          type="button"
-                          onClick={() => setAdhocJobId(j.id)}
-                          className="px-2 py-1 rounded-full text-[10px] font-bold uppercase bg-gray-100 text-gray-700 hover:bg-gray-200"
-                          title={j.description || j.jobName}
-                        >
-                          {normalizeScheduleType(j.jobType) === 'recurring' ? 'RECURRING' : 'ONCE OFF'} • {j.jobName}
-                        </button>
-                      ))}
-                      {adHocJobsForSite.length > 3 && (
-                        <span className="text-[10px] font-bold uppercase text-gray-400 px-2 py-1">
-                          +{adHocJobsForSite.length - 3} more
-                        </span>
-                      )}
-                    </div>
+                ) : (
+                  <div className="w-full so-input bg-gray-50 px-3 py-2 text-sm text-gray-800 border border-[#edeef0] rounded-lg">
+                    Contract Work
                   </div>
                 )}
               </div>
@@ -833,38 +984,29 @@ const TimeEntryForm: React.FC<TimeEntryFormProps> = ({
           <div className="space-y-6">
             <div className="sticky top-0 z-30 bg-white border border-[#edeef0] rounded-xl px-4 py-3 shadow-sm flex items-center justify-between h-20">
               <div className="grid grid-cols-4 divide-x divide-gray-100 flex-1">
-                {['Budget', 'Actual', 'Variance', 'Est. Pay'].map((label, idx) => (
+                {[(adhocJobId ? 'Scheduled' : 'Budget'), 'Actual', 'Variance', 'Est. Pay'].map((label, idx) => (
                   <div key={label} className="px-6 flex flex-col justify-center">
                     <span className="text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-1.5">{label}</span>
                     <span className={`text-sm font-bold ${label === 'Variance' && summary && summary.variance > 0.1 ? 'text-red-600' : 'text-gray-900'}`}>
                       {idx === 0 ? (summary?.budgetDisplay ?? summary?.budgetTotal ?? 0).toFixed(1) + 'h' : idx === 1 ? summary?.actualTotal.toFixed(1) + 'h' : idx === 2 ? (summary!.variance > 0 ? '+' : '') + summary?.variance.toFixed(1) + 'h' : '$' + (summary?.estPay ?? 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
                     </span>
                     {label === 'Budget' && summary?.isPeriodBudget && summary.periodCap > 0 && (
-                      <span className="text-[9px] text-gray-400 mt-0.5">Site cap: {summary.periodCap.toFixed(1)}h</span>
-                    )}
-                    {label === 'Budget' && adhocJobId && activeAdHocJob && (
-                      <span className="text-[9px] text-gray-400 mt-0.5">
-                        {normalizeScheduleType(activeAdHocJob.jobType) === 'recurring' ? 'Recurring' : 'Once off'} • {activeAdHocOccurrences.length} occ
-                      </span>
-                    )}
-                    {label === 'Est. Pay' && adhocJobId && summary && (summary as any).adhocChargeTotal != null && (
-                      <span className="text-[9px] text-gray-400 mt-0.5">
-                        Charge: {new Intl.NumberFormat('en-AU', { style: 'currency', currency: 'AUD', minimumFractionDigits: 0, maximumFractionDigits: 0 }).format((summary as any).adhocChargeTotal)} • Cost: {new Intl.NumberFormat('en-AU', { style: 'currency', currency: 'AUD', minimumFractionDigits: 0, maximumFractionDigits: 0 }).format((summary as any).adhocCostTotal)}
-                      </span>
+                      <span className="text-[9px] text-gray-400 mt-0.5 leading-tight">Site cap: {summary.periodCap.toFixed(1)}h</span>
                     )}
                   </div>
                 ))}
               </div>
               <div className="flex items-center gap-3 pr-2">
-                <button
-                  type="button"
-                  onClick={handleAutoFill}
-                  disabled={!!adhocJobId}
-                  className="flex flex-col items-center justify-center w-24 h-14 rounded-xl border border-[#edeef0] bg-white text-gray-700 hover:bg-gray-50 hover:border-gray-300 transition-all"
-                  title={adhocJobId ? "Auto fill is not available for Ad Hoc jobs" : "Fill empty days with remaining plan hours"}
-                >
-                  <Zap size={12} className="opacity-70 mb-0.5" /><span className="text-[10px] font-bold uppercase">Auto fill</span>
-                </button>
+                {!adhocJobId && (
+                  <button
+                    type="button"
+                    onClick={handleAutoFill}
+                    className="flex flex-col items-center justify-center w-24 h-14 rounded-xl border border-[#edeef0] bg-white text-gray-700 hover:bg-gray-50 hover:border-gray-300 transition-all"
+                    title="Fill empty days with remaining plan hours"
+                  >
+                    <Zap size={12} className="opacity-70 mb-0.5" /><span className="text-[10px] font-bold uppercase">Auto fill</span>
+                  </button>
+                )}
                 {adhocJobId && (
                   <button
                     type="button"
@@ -1011,6 +1153,7 @@ const TimeEntryForm: React.FC<TimeEntryFormProps> = ({
               try {
                 const periodYmd = format(currentPeriod.startDate, 'yyyy-MM-dd');
                 let siteNotesLookup: SiteNotesExportLookup | undefined;
+                let adHocJobsForExport: AdHocJob[] = [];
                 const token = await getGraphAccessToken();
                 if (token) {
                   try {
@@ -1019,6 +1162,11 @@ const TimeEntryForm: React.FC<TimeEntryFormProps> = ({
                   } catch {
                     /* export without notes if list unavailable */
                   }
+                  try {
+                    adHocJobsForExport = await getAdHocJobs(token);
+                  } catch {
+                    /* export still works without ad hoc metadata fallback */
+                  }
                 }
                 exportFortnightTimesheets(
                   currentPeriod,
@@ -1026,7 +1174,8 @@ const TimeEntryForm: React.FC<TimeEntryFormProps> = ({
                   cleaners,
                   entries as any,
                   'xlsx',
-                  siteNotesLookup
+                  siteNotesLookup,
+                  adHocJobsForExport
                 );
               } catch (e) {
                 console.error('Export (XLSX) failed', e);
@@ -1041,13 +1190,14 @@ const TimeEntryForm: React.FC<TimeEntryFormProps> = ({
         </div>
       </div>
 
-      <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3">
+      <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-7 gap-3">
         {([
           { key: 'all' as QueueKey, label: 'All Sites', count: queueCounts.all },
           { key: 'needs-hours' as QueueKey, label: 'Sites needing hours', count: queueCounts.needs },
           { key: 'incomplete' as QueueKey, label: 'Incomplete sites', count: queueCounts.incomplete },
           { key: 'over-budget' as QueueKey, label: 'Over budget sites', count: queueCounts.over },
           { key: 'completed' as QueueKey, label: 'Completed sites', count: queueCounts.completed },
+          { key: 'adhoc' as QueueKey, label: 'Adhoc jobs', count: queueCounts.adhoc },
         ]).map((card) => {
           const active = queueKey === card.key;
           return (
@@ -1055,28 +1205,38 @@ const TimeEntryForm: React.FC<TimeEntryFormProps> = ({
               key={card.key}
               type="button"
               onClick={() => setQueueKey(card.key)}
-              className={`text-left so-card-soft px-3.5 py-3 rounded-xl cursor-pointer focus:outline-none focus:ring-2 focus:ring-[#3E5F6A]/40 ${
+              className={`h-full text-left so-card-soft px-3.5 py-3 rounded-xl cursor-pointer focus:outline-none focus:ring-2 focus:ring-[#3E5F6A]/40 ${
                 active
                   ? 'border-[#3E5F6A] bg-[#ECF3F4]'
                   : 'border-transparent hover:border-[#3E5F6A]/50'
               }`}
             >
-              <p className="text-[11px] font-medium text-gray-500 uppercase tracking-[0.18em] mb-1">
+              <div className="flex h-full flex-col">
+              <p className="min-h-[2.1rem] text-[11px] font-medium text-gray-500 uppercase tracking-[0.18em] leading-snug">
                 {card.label}
               </p>
-              <p className={`text-[20px] font-semibold ${active ? 'text-[#3E5F6A]' : 'text-gray-900'}`}>
+              <p className={`mt-auto text-[20px] font-semibold leading-none tabular-nums ${active ? 'text-[#3E5F6A]' : 'text-gray-900'}`}>
                 {card.count}
               </p>
+              </div>
             </button>
           );
         })}
-        <div className="text-left so-card-soft px-3.5 py-3 rounded-xl border-transparent">
-          <p className="text-[11px] font-medium text-gray-500 uppercase tracking-[0.18em] mb-1">
+        <div className="h-full text-left so-card-soft px-3.5 py-3 rounded-xl border-transparent">
+          <div className="flex h-full flex-col">
+          <p className="min-h-[2.1rem] text-[11px] font-medium text-gray-500 uppercase tracking-[0.18em] leading-snug">
             Estimated budget
           </p>
-          <p className="text-[20px] font-semibold text-gray-900">
-            {new Intl.NumberFormat('en-AU', { style: 'currency', currency: 'AUD', minimumFractionDigits: 0, maximumFractionDigits: 0 }).format(totalEstimatedBudget)}
+          <p className="mt-auto text-[20px] font-semibold leading-none tabular-nums text-gray-900">
+            {new Intl.NumberFormat('en-AU', { style: 'currency', currency: 'AUD', minimumFractionDigits: 0, maximumFractionDigits: 0 }).format(portfolioBudgetWithAdHoc)}
           </p>
+          {adHocLabourPaidFortnight > 0 && (
+            <p className="text-[9px] text-gray-500 mt-2 leading-tight">
+              Incl. ad hoc labour entered:{' '}
+              {new Intl.NumberFormat('en-AU', { style: 'currency', currency: 'AUD', minimumFractionDigits: 0, maximumFractionDigits: 0 }).format(adHocLabourPaidFortnight)}
+            </p>
+          )}
+          </div>
         </div>
       </div>
       <div className="relative">
@@ -1091,6 +1251,96 @@ const TimeEntryForm: React.FC<TimeEntryFormProps> = ({
         />
       </div>
       <div className="space-y-3">
+        {queueKey === 'adhoc' && fortnightAdHocJobs.length > 0 && (
+          <div className="space-y-2 mb-1">
+            <p className="text-[10px] font-bold text-gray-500 uppercase tracking-widest px-1">
+              Ad hoc jobs this fortnight — select to enter timesheet hours
+            </p>
+            {fortnightAdHocJobs.map((job) => {
+              const linkedSite = job.siteId ? sites.find((s) => String(s.id) === String(job.siteId)) : undefined;
+              const targetSite = linkedSite;
+              const siteLabel =
+                targetSite?.name?.trim() ||
+                job.manualSiteName?.trim() ||
+                "Ad hoc site";
+              const selected = adhocJobId === job.id;
+              const sums = adHocSummaryById[job.id] ?? {
+                plannedHours: 0,
+                plannedCost: 0,
+                loggedHours: 0,
+                loggedCost: 0,
+                variance: 0,
+              };
+              const variancePositive = sums.variance > 0.05;
+              const varianceNegative = sums.variance < -0.05;
+              return (
+                <div
+                  key={job.id}
+                  role="button"
+                  tabIndex={0}
+                  onClick={() => {
+                    const contextSiteId = targetSite ? String(targetSite.id) : `adhoc:${job.id}`;
+                    setActiveSiteId(contextSiteId);
+                    setAdhocJobId(job.id);
+                    setActiveAdHocCardJobId(job.id);
+                  }}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter" || e.key === " ") {
+                      e.preventDefault();
+                      (e.currentTarget as HTMLDivElement).click();
+                    }
+                  }}
+                  className={`group border rounded-lg p-4 flex items-center justify-between transition-colors ${
+                    selected
+                      ? "border-amber-500 bg-amber-50 cursor-pointer"
+                      : "border-amber-200/80 bg-amber-50/40 cursor-pointer hover:border-amber-400"
+                  }`}
+                >
+                  <div className="flex items-center gap-4 min-w-0">
+                    <div className="w-10 h-10 border border-amber-200 rounded-xl flex items-center justify-center text-amber-700 bg-amber-100/80 shrink-0">
+                      <Briefcase size={20} />
+                    </div>
+                    <div className="min-w-0">
+                      <h4 className="text-sm font-bold text-gray-900 truncate">{job.jobName}</h4>
+                      <p className="text-[10px] text-gray-500 truncate uppercase font-bold">{siteLabel}</p>
+                    </div>
+                  </div>
+                  <div className="text-right border-l border-amber-100 pl-6 min-w-[132px] space-y-1.5 shrink-0">
+                    <div>
+                      <p className="text-[9px] font-bold text-gray-400 uppercase">Assigned budget</p>
+                      <p className="text-xs font-black text-gray-800">{sums.plannedHours.toFixed(1)}h</p>
+                    </div>
+                    <div>
+                      <p className="text-[9px] font-bold text-gray-400 uppercase">Est. budget</p>
+                      <p className="text-xs font-black text-gray-800">
+                        {new Intl.NumberFormat('en-AU', { style: 'currency', currency: 'AUD', minimumFractionDigits: 0, maximumFractionDigits: 0 }).format(sums.plannedCost)}
+                      </p>
+                    </div>
+                    <div>
+                      <p
+                        className={`text-[10px] font-black ${
+                          variancePositive
+                            ? 'text-red-700'
+                            : varianceNegative
+                            ? 'text-amber-700'
+                            : 'text-green-700'
+                        }`}
+                      >
+                        {sums.variance > 0 ? '+' : ''}
+                        {sums.variance.toFixed(1)}h
+                      </p>
+                    </div>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        )}
+        {queueKey === 'adhoc' && fortnightAdHocJobs.length === 0 && (
+          <p className="text-sm text-amber-800/90 bg-amber-50 border border-amber-100 rounded-lg px-4 py-3">
+            No ad hoc jobs have planned work in this fortnight.
+          </p>
+        )}
         {orderedSites.map(site => {
           const summary = siteSummaryById[site.id];
           const budget = summary?.budgetTotal ?? 0;

@@ -22,8 +22,7 @@ import { getCleanTrackManagers } from "../repositories/usersRepo";
 import { createSiteBudget, getSiteBudgets, updateSiteBudget, type SiteBudgetHours } from "../repositories/budgetsRepo";
 import { getSiteCleanerAssignments } from "../repositories/assignedCleanersRepo";
 import { normalizeListItemId } from "../lib/sharepoint";
-
-const AU_STATES = ["ACT", "NSW", "NT", "QLD", "SA", "TAS", "VIC", "WA"];
+import { AU_STATES } from "../lib/auStates";
 const DAY_LABELS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"] as const;
 type DayKey = (typeof DAY_LABELS)[number];
 /** Display order: Monday first, Sunday last. */
@@ -162,7 +161,7 @@ const SiteManager: React.FC<SiteManagerProps> = ({ onUpdateSite, onViewSite, ref
   const [bulkProgress, setBulkProgress] = useState<{ current: number; total: number } | null>(null);
   const [bulkError, setBulkError] = useState<string | null>(null);
   const [siteSearchQuery, setSiteSearchQuery] = useState("");
-  type SiteSortKey = "name" | "address" | "state" | "fortnightlyCap";
+  type SiteSortKey = "name" | "address" | "state" | "monthlyRevenue" | "fortnightlyCap";
   const [siteSortBy, setSiteSortBy] = useState<SiteSortKey>("name");
   const [siteSortDir, setSiteSortDir] = useState<"asc" | "desc">("asc");
   const [selectedSiteIds, setSelectedSiteIds] = useState<string[]>([]);
@@ -288,6 +287,10 @@ const SiteManager: React.FC<SiteManagerProps> = ({ onUpdateSite, onViewSite, ref
         const sa = (a.state || "").toLowerCase();
         const sb = (b.state || "").toLowerCase();
         cmp = sa.localeCompare(sb);
+      } else if (siteSortBy === "monthlyRevenue") {
+        const ra = Number(a.monthlyRevenue ?? 0);
+        const rb = Number(b.monthlyRevenue ?? 0);
+        cmp = ra - rb;
       } else {
         cmp = capA - capB;
       }
@@ -301,7 +304,7 @@ const SiteManager: React.FC<SiteManagerProps> = ({ onUpdateSite, onViewSite, ref
       setSiteSortDir((d) => (d === "asc" ? "desc" : "asc"));
     } else {
       setSiteSortBy(key);
-      setSiteSortDir(key === "fortnightlyCap" ? "desc" : "asc");
+      setSiteSortDir(key === "fortnightlyCap" || key === "monthlyRevenue" ? "desc" : "asc");
     }
   };
 
@@ -1123,7 +1126,7 @@ const SiteManager: React.FC<SiteManagerProps> = ({ onUpdateSite, onViewSite, ref
                     {siteSortBy === "name" && (siteSortDir === "asc" ? <ChevronUp size={12} /> : <ChevronDown size={12} />)}
                   </button>
                 </th>
-                <th className="hidden md:table-cell px-1.5 py-1.5 text-left">
+                <th className="hidden md:table-cell px-1.5 py-1.5 text-center">
                   <button
                     type="button"
                     onClick={() => handleSiteSort("address")}
@@ -1133,7 +1136,7 @@ const SiteManager: React.FC<SiteManagerProps> = ({ onUpdateSite, onViewSite, ref
                     {siteSortBy === "address" && (siteSortDir === "asc" ? <ChevronUp size={12} /> : <ChevronDown size={12} />)}
                   </button>
                 </th>
-                <th className="hidden md:table-cell px-1.5 py-1.5 text-left">
+                <th className="hidden md:table-cell px-1.5 py-1.5 text-center">
                   <button
                     type="button"
                     onClick={() => handleSiteSort("state")}
@@ -1144,18 +1147,25 @@ const SiteManager: React.FC<SiteManagerProps> = ({ onUpdateSite, onViewSite, ref
                   </button>
                 </th>
                 {isAdmin && (
-                  <th className="hidden md:table-cell px-1.5 py-1.5 text-[10px] font-semibold text-gray-700 uppercase tracking-widest">
-                    Monthly revenue
+                  <th className="hidden md:table-cell px-1.5 py-1.5 text-center">
+                    <button
+                      type="button"
+                      onClick={() => handleSiteSort("monthlyRevenue")}
+                      className="text-[10px] font-semibold text-gray-700 uppercase tracking-widest inline-flex items-center justify-center gap-0.5 hover:text-gray-900 focus:outline-none focus:ring-2 focus:ring-gray-900/20 rounded"
+                    >
+                      Monthly revenue
+                      {siteSortBy === "monthlyRevenue" && (siteSortDir === "asc" ? <ChevronUp size={12} /> : <ChevronDown size={12} />)}
+                    </button>
                   </th>
                 )}
-                <th className="hidden md:table-cell px-1.5 py-1.5 text-[10px] font-semibold text-gray-700 uppercase tracking-widest">Assigned managers</th>
-                <th className="px-2 py-2 md:px-1.5 md:py-1.5 text-[10px] font-semibold text-gray-700 uppercase tracking-widest">Daily hours</th>
-                <th className="hidden md:table-cell px-1.5 py-1.5 text-[10px] font-semibold text-gray-700 uppercase tracking-widest">Weekday rate</th>
-                <th className="px-2 py-2 md:px-1.5 md:py-1.5">
+                <th className="hidden md:table-cell px-1.5 py-1.5 text-[10px] font-semibold text-gray-700 uppercase tracking-widest text-center">Assigned managers</th>
+                <th className="px-2 py-2 md:px-1.5 md:py-1.5 text-[10px] font-semibold text-gray-700 uppercase tracking-widest text-center">Daily hours</th>
+                <th className="hidden md:table-cell px-1.5 py-1.5 text-[10px] font-semibold text-gray-700 uppercase tracking-widest text-center">Weekday rate</th>
+                <th className="px-2 py-2 md:px-1.5 md:py-1.5 text-center">
                   <button
                     type="button"
                     onClick={() => handleSiteSort("fortnightlyCap")}
-                    className="text-[10px] font-semibold text-gray-700 uppercase tracking-widest flex items-center gap-0.5 hover:text-gray-900 focus:outline-none focus:ring-2 focus:ring-gray-900/20 rounded"
+                    className="text-[10px] font-semibold text-gray-700 uppercase tracking-widest inline-flex items-center justify-center gap-0.5 hover:text-gray-900 focus:outline-none focus:ring-2 focus:ring-gray-900/20 rounded"
                   >
                     Fortnight cap
                     {siteSortBy === "fortnightlyCap" && (siteSortDir === "asc" ? <ChevronUp size={12} /> : <ChevronDown size={12} />)}
@@ -1225,13 +1235,13 @@ const SiteManager: React.FC<SiteManagerProps> = ({ onUpdateSite, onViewSite, ref
                     <span className="text-[11px] text-gray-400">—</span>
                   )}
                 </td>
-                <td className="hidden md:table-cell px-1.5 py-1.5 align-top whitespace-nowrap">
-                  <span className="text-[11px] font-medium text-gray-700">{site.state || "—"}</span>
+                <td className="hidden md:table-cell px-1.5 py-1.5 align-middle text-center whitespace-nowrap">
+                  <span className="text-[11px] font-medium text-gray-700 inline-block">{site.state || "—"}</span>
                 </td>
                 {isAdmin && (
-                  <td className="hidden md:table-cell px-1.5 py-1.5 align-top whitespace-nowrap">
+                  <td className="hidden md:table-cell px-1.5 py-1.5 align-middle text-center whitespace-nowrap">
                     {site.monthlyRevenue != null ? (
-                      <span className="text-[11px] font-medium text-gray-700">
+                      <span className="text-[11px] font-medium text-gray-700 inline-block">
                         {new Intl.NumberFormat("en-AU", {
                           style: "currency",
                           currency: "AUD",
@@ -1244,14 +1254,14 @@ const SiteManager: React.FC<SiteManagerProps> = ({ onUpdateSite, onViewSite, ref
                     )}
                   </td>
                 )}
-                <td className="hidden md:table-cell px-1.5 py-1.5 align-top">
+                  <td className="hidden md:table-cell px-1.5 py-1.5 align-middle text-center">
                   {(() => {
                     const { assignedManagers } = assignedManagersBySiteId[site.id] ?? { assignedManagers: [] };
                     if (assignedManagers.length === 0) {
                       return <span className="text-[10px] text-gray-400">No assigned managers</span>;
                     }
                     return (
-                      <div className="flex flex-wrap gap-1 items-center">
+                      <div className="flex flex-wrap gap-1 items-center justify-center">
                         {assignedManagers.map((a, i) => {
                           const name = a.managerName || "";
                           const parts = name.trim().split(/\s+/);
@@ -1276,9 +1286,9 @@ const SiteManager: React.FC<SiteManagerProps> = ({ onUpdateSite, onViewSite, ref
                     );
                   })()}
                 </td>
-                <td className="px-2 py-2 md:px-1.5 md:py-1.5 align-top">
+                <td className="px-2 py-2 md:px-1.5 md:py-1.5 align-middle text-center">
                   {dayHours.length > 0 ? (
-                    <div className="grid grid-cols-7 gap-1 md:gap-px bg-[#edeef0] rounded border border-[#edeef0] overflow-hidden max-w-full md:max-w-[250px]">
+                    <div className="grid grid-cols-7 gap-1 md:gap-px bg-[#edeef0] rounded border border-[#edeef0] overflow-hidden max-w-full md:max-w-[250px] mx-auto">
                       {dayHours.map(({ day, h }) => (
                         <div
                           key={day}
@@ -1298,15 +1308,15 @@ const SiteManager: React.FC<SiteManagerProps> = ({ onUpdateSite, onViewSite, ref
                     <span className="text-[10px] text-gray-400">—</span>
                   )}
                 </td>
-                <td className="hidden md:table-cell px-1.5 py-1.5 align-top">
+                <td className="hidden md:table-cell px-1.5 py-1.5 align-middle text-center">
                   {budgetRate != null && budgetRate >= 0 ? (
                     <span className="text-[11px] font-medium text-gray-700">${Number(budgetRate).toFixed(2)}/hr</span>
                   ) : (
                     <span className="text-[10px] text-gray-400">—</span>
                   )}
                 </td>
-                <td className="px-2 py-2 md:px-1.5 md:py-1.5 align-top whitespace-nowrap">
-                  <span className="text-sm md:text-xs font-bold text-gray-900">{fortnightCap}h</span>
+                <td className="px-2 py-2 md:px-1.5 md:py-1.5 align-middle text-center whitespace-nowrap">
+                  <span className="text-sm md:text-xs font-bold text-gray-900 inline-block">{fortnightCap}h</span>
                 </td>
                 {isAdmin && (
                   <td className="px-2 py-2 md:px-1.5 md:py-1.5 align-top text-right whitespace-nowrap">

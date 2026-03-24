@@ -199,7 +199,7 @@ export interface TimesheetEntryFlat {
   id: string;
   date: string;
   hours: number;
-  siteId: string;
+  siteId?: string;
   cleanerId: string;
   /** Optional display names from the Site and Cleaner lookups, used as a fallback join key if ids drift. */
   siteName?: string;
@@ -275,9 +275,9 @@ export async function getTimesheetEntriesForRange(
     const hours = toNum(f[hoursKey] ?? f["Hours"]);
     const { id: siteIdRaw, name: siteNameRaw } = getLookupIdOrName(f, "Site");
     const { id: cleanerIdRaw, name: cleanerNameRaw } = getLookupIdOrName(f, "Cleaner");
-    if (!siteIdRaw || !cleanerIdRaw) continue;
+    if (!cleanerIdRaw) continue;
     // Normalize lookup ids so they match app-level site.id / cleaner.id (Graph may return path-style ids).
-    const siteIdVal = sharepoint.normalizeListItemId(siteIdRaw);
+    const siteIdVal = siteIdRaw ? sharepoint.normalizeListItemId(siteIdRaw) : "";
     const cleanerIdVal = sharepoint.normalizeListItemId(cleanerIdRaw);
     const rate = cleanerRateMap[cleanerIdVal] ?? 0;
     // Normalize Work Date to YYYY-MM-DD.
@@ -301,8 +301,8 @@ export async function getTimesheetEntriesForRange(
       id: item.id!,
       date: dateStr,
       hours,
-      siteId: siteIdVal,
       cleanerId: cleanerIdVal,
+      ...(siteIdVal ? { siteId: siteIdVal } : {}),
       siteName: siteNameRaw || undefined,
       cleanerName: cleanerNameRaw || undefined,
       pay_rate_snapshot: rate || undefined,
@@ -320,7 +320,7 @@ export async function getTimesheetEntriesForRange(
 
 /** Payload for one timesheet row (site + cleaner + date + hours; optional ad hoc job). */
 export interface TimesheetEntryPayload {
-  siteId: string;
+  siteId?: string | null;
   cleanerId: string;
   date: string;
   hours: number;
@@ -365,10 +365,10 @@ export async function saveTimesheetEntriesToSharePoint(
 
   const byComposite = new Map<string, TimesheetEntryPayload[]>();
   for (const e of entries) {
-    const sId = sharepoint.normalizeListItemId(e.siteId);
+    const sId = e.siteId ? sharepoint.normalizeListItemId(e.siteId) : "";
     const cId = sharepoint.normalizeListItemId(e.cleanerId);
     const aId = e.adhocJobId != null ? sharepoint.normalizeListItemId(e.adhocJobId) : "";
-    const composite = `${sId}|${cId}|${aId}`;
+    const composite = `${sId || "__NO_SITE__"}|${cId}|${aId}`;
     if (!byComposite.has(composite)) byComposite.set(composite, []);
     byComposite.get(composite)!.push({ ...e, siteId: sId, cleanerId: cId, adhocJobId: aId || null });
   }
@@ -391,8 +391,9 @@ export async function saveTimesheetEntriesToSharePoint(
   const errors: string[] = [];
   for (const [composite, group] of byComposite.entries()) {
     const [sId, cId, aId] = composite.split("|");
-    if (!sId || !cId) continue;
-    const siteLookupVal = /^\d+$/.test(sId) ? parseInt(sId, 10) : sId;
+    if (!cId) continue;
+    const hasSite = sId !== "__NO_SITE__";
+    const siteLookupVal = hasSite && /^\d+$/.test(sId) ? parseInt(sId, 10) : sId;
     const cleanerLookupVal = /^\d+$/.test(cId) ? parseInt(cId, 10) : cId;
     const adHocLookupVal =
       aId && aId.trim()
@@ -406,8 +407,12 @@ export async function saveTimesheetEntriesToSharePoint(
       const f = (item.fields ?? {}) as Record<string, unknown>;
       const siteVal = Number(f[siteLookupIdKey]);
       const cleanerVal = Number(f[cleanerLookupIdKey]);
-      if (!Number.isFinite(siteVal) || !Number.isFinite(cleanerVal)) continue;
-      if (siteVal !== Number(siteLookupVal) || cleanerVal !== Number(cleanerLookupVal)) continue;
+      if (!Number.isFinite(cleanerVal) || cleanerVal !== Number(cleanerLookupVal)) continue;
+      if (hasSite) {
+        if (!Number.isFinite(siteVal) || siteVal !== Number(siteLookupVal)) continue;
+      } else {
+        if (Number.isFinite(siteVal) && siteVal > 0) continue;
+      }
 
       if (adHocJobKey) {
         const ahRaw = f[adHocJobKey];
@@ -465,9 +470,9 @@ export async function saveTimesheetEntriesToSharePoint(
           const createFields: Record<string, unknown> = {
             [workDateKey]: workDate,
             [hoursKey]: entry.hours,
-            [siteLookupIdKey]: siteLookupVal,
             [cleanerLookupIdKey]: cleanerLookupVal,
           };
+          if (hasSite) createFields[siteLookupIdKey] = siteLookupVal;
           if (adHocJobKey && adHocLookupVal != null) createFields[adHocJobKey] = adHocLookupVal;
           return {
             id: `post-${batchIdx}-${j}`,

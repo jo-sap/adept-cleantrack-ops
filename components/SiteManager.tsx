@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback, useRef, useMemo } from "react";
-import { Plus, Edit3, X, MapPin, Loader2, Trash2, Layers, Search, ChevronUp, ChevronDown, UserMinus, UserPlus } from "lucide-react";
+import { Plus, Edit3, X, Loader2, Trash2, Layers, Search, ChevronUp, ChevronDown, UserMinus, UserPlus } from "lucide-react";
 import { useRole } from "../contexts/RoleContext";
 import { useAppAuth } from "../contexts/AppAuthContext";
 import { getGraphAccessToken } from "../lib/graph";
@@ -55,6 +55,151 @@ function budgetHasAnyWeek2(b: SiteBudgetHours): boolean {
     b.week2Thursday !== undefined ||
     b.week2Friday !== undefined ||
     b.week2Saturday !== undefined
+  );
+}
+
+/**
+ * Display rates for list/cards; matches edit-modal fallbacks (legacy Budget / Weekend labour columns).
+ */
+function effectiveBudgetLabourRates(budget: SiteBudgetHours | undefined): {
+  weekday: number | undefined;
+  saturday: number | undefined;
+  sunday: number | undefined;
+  ph: number | undefined;
+} {
+  if (!budget) {
+    return { weekday: undefined, saturday: undefined, sunday: undefined, ph: undefined };
+  }
+  const weekdayRaw = budget.weekdayLabourRate ?? budget.budgetLabourRate;
+  const weekday =
+    weekdayRaw != null && typeof weekdayRaw === "number" && weekdayRaw >= 0 ? weekdayRaw : undefined;
+  const weekend =
+    budget.weekendLabourRate != null &&
+    typeof budget.weekendLabourRate === "number" &&
+    budget.weekendLabourRate >= 0
+      ? budget.weekendLabourRate
+      : undefined;
+  const saturday =
+    budget.saturdayLabourRate != null && budget.saturdayLabourRate >= 0
+      ? budget.saturdayLabourRate
+      : weekend;
+  const sunday =
+    budget.sundayLabourRate != null && budget.sundayLabourRate >= 0 ? budget.sundayLabourRate : weekend;
+  const ph = budget.phLabourRate != null && budget.phLabourRate >= 0 ? budget.phLabourRate : undefined;
+  return { weekday, saturday, sunday, ph };
+}
+
+type BudgetLabourRatesDisplay = ReturnType<typeof effectiveBudgetLabourRates>;
+
+/** Single-line labour rates for table cells (MF / Sa / Su / PH). */
+function LabourRatesInlineCell({ rates }: { rates: BudgetLabourRatesDisplay }) {
+  const fmt = (r: number | undefined) => (r != null && r >= 0 ? `$${Number(r).toFixed(2)}` : "—");
+  const piece = (abbr: string, expand: string, rate: number | undefined) => (
+    <span className="whitespace-nowrap">
+      <abbr title={expand} className="text-gray-500 font-medium no-underline cursor-help">
+        {abbr}
+      </abbr>{" "}
+      <span className="font-semibold text-gray-900">{fmt(rate)}</span>
+    </span>
+  );
+  return (
+    <div
+      className="text-[11px] md:text-[10px] text-gray-800 tabular-nums leading-snug whitespace-normal md:whitespace-nowrap"
+      title={`Mon–Fri ${fmt(rates.weekday)} · Sat ${fmt(rates.saturday)} · Sun ${fmt(rates.sunday)} · PH ${fmt(rates.ph)} (per hour)`}
+    >
+      <span className="inline-flex flex-wrap md:flex-nowrap items-baseline gap-x-2 gap-y-0.5">
+        {piece("MF", "Monday–Friday", rates.weekday)}
+        <span className="text-gray-300 select-none" aria-hidden>
+          ·
+        </span>
+        {piece("Sa", "Saturday", rates.saturday)}
+        <span className="text-gray-300 select-none" aria-hidden>
+          ·
+        </span>
+        {piece("Su", "Sunday", rates.sunday)}
+        <span className="text-gray-300 select-none" aria-hidden>
+          ·
+        </span>
+        {piece("PH", "Public holiday", rates.ph)}
+      </span>
+    </div>
+  );
+}
+
+function isFortnightlyBudgetVisit(b: SiteBudgetHours): boolean {
+  return String(b.visitFrequency ?? "")
+    .toLowerCase()
+    .includes("fortnight");
+}
+
+function SiteBudgetDayHoursGrid({ budget }: { budget: SiteBudgetHours }) {
+  type DayH = { day: string; h: number | undefined };
+  const week1: DayH[] = [
+    { day: "Mon", h: budget.monday },
+    { day: "Tue", h: budget.tuesday },
+    { day: "Wed", h: budget.wednesday },
+    { day: "Thu", h: budget.thursday },
+    { day: "Fri", h: budget.friday },
+    { day: "Sat", h: budget.saturday },
+    { day: "Sun", h: budget.sunday },
+  ];
+  const week2: DayH[] = [
+    { day: "Mon", h: budget.week2Monday },
+    { day: "Tue", h: budget.week2Tuesday },
+    { day: "Wed", h: budget.week2Wednesday },
+    { day: "Thu", h: budget.week2Thursday },
+    { day: "Fri", h: budget.week2Friday },
+    { day: "Sat", h: budget.week2Saturday },
+    { day: "Sun", h: budget.week2Sunday },
+  ];
+  const showTwoWeekRows = isFortnightlyBudgetVisit(budget) && budgetHasAnyWeek2(budget);
+
+  const cell = ({ day, h }: DayH) => {
+    const filled = h != null && h > 0;
+    const short = day.slice(0, 2);
+    return (
+      <div
+        key={day}
+        className={`min-h-[2.65rem] px-1 py-1 flex flex-col items-center justify-center text-center ${
+          filled ? "text-blue-700" : "text-gray-400"
+        } bg-white`}
+        title={h !== undefined ? `${day}: ${h}h` : `${day}: not set`}
+      >
+        <span className="text-[7px] sm:text-[8px] font-bold uppercase tracking-tight text-gray-500 leading-none">{short}</span>
+        <span className="text-[10px] sm:text-[11px] font-bold tabular-nums leading-none mt-0.5">
+          {h !== undefined ? String(h) : "—"}
+        </span>
+      </div>
+    );
+  };
+
+  const row = (days: DayH[], label: string | null) => (
+    <div key={label ?? "single"}>
+      {label ? (
+        <div className="text-[9px] font-semibold text-gray-400 uppercase tracking-wider mb-0.5 text-center">{label}</div>
+      ) : null}
+      <div className="grid grid-cols-7 gap-px bg-[#edeef0] rounded-md border border-[#edeef0] overflow-hidden shadow-sm">
+        {days.map((d) => cell(d))}
+      </div>
+    </div>
+  );
+
+  const ariaSummary = (days: DayH[]) => days.map(({ day, h }) => `${day} ${h ?? "—"}h`).join(", ");
+  const ariaLabel = showTwoWeekRows
+    ? `Week 1: ${ariaSummary(week1)}. Week 2: ${ariaSummary(week2)}`
+    : `Planned hours per day: ${ariaSummary(week1)}`;
+
+  return (
+    <div className="w-full max-w-[min(100%,22rem)] md:max-w-[26rem] mx-auto space-y-1.5" aria-label={ariaLabel}>
+      {showTwoWeekRows ? (
+        <>
+          {row(week1, "Week 1")}
+          {row(week2, "Week 2")}
+        </>
+      ) : (
+        row(week1, null)
+      )}
+    </div>
   );
 }
 
@@ -1093,7 +1238,7 @@ const SiteManager: React.FC<SiteManagerProps> = ({ onUpdateSite, onViewSite, ref
           {sortedSites.map((site) => {
             const budget = budgetsBySiteId[String(site.id)];
             const fortnightCap = budget?.fortnightCap ?? 0;
-            const budgetRate = budget?.weekdayLabourRate ?? budget?.budgetLabourRate;
+            const labourRates = effectiveBudgetLabourRates(budget);
             return (
               <div
                 key={site.id}
@@ -1128,10 +1273,10 @@ const SiteManager: React.FC<SiteManagerProps> = ({ onUpdateSite, onViewSite, ref
                         }).format(Number(site.monthlyRevenue))}
                       </p>
                     )}
-                    {budgetRate != null && budgetRate >= 0 && (
-                      <p className="text-[11px] text-gray-500 mt-0.5">
-                        Weekday rate: ${Number(budgetRate).toFixed(2)}/hr
-                      </p>
+                    {budget && (
+                      <div className="mt-1.5">
+                        <LabourRatesInlineCell rates={labourRates} />
+                      </div>
                     )}
                   </div>
                   {isAdmin && (
@@ -1168,64 +1313,55 @@ const SiteManager: React.FC<SiteManagerProps> = ({ onUpdateSite, onViewSite, ref
           })}
         </div>
         <div className="hidden md:block so-table bg-white table-scroll-mobile">
-          <table className="w-full border-collapse text-left min-w-[860px] table-auto md:table-fixed md:min-w-[1020px]">
+          <table className="w-full border-collapse min-w-[860px] table-auto md:table-fixed md:min-w-[1180px] text-center">
             <colgroup className="hidden md:contents">
               {isAdmin && <col style={{ width: '4%' }} />}
-              <col style={{ width: isAdmin ? '15%' : '17%' }} />
               <col style={{ width: isAdmin ? '15%' : '18%' }} />
-              <col style={{ width: '6%' }} />
-              {isAdmin && <col style={{ width: '9%' }} />}
-              <col style={{ width: '10%' }} />
-              <col style={{ width: isAdmin ? '17%' : '19%' }} />
-              <col style={{ width: '12%' }} />
-              <col style={{ width: isAdmin ? '6%' : '8%' }} />
-              {isAdmin && <col style={{ width: '10%' }} />}
+              <col style={{ width: '5%' }} />
+              {isAdmin && <col style={{ width: '8%' }} />}
+              <col style={{ width: '8%' }} />
+              <col style={{ width: isAdmin ? '24%' : '28%' }} />
+              <col style={{ width: isAdmin ? '22%' : '26%' }} />
+              <col style={{ width: isAdmin ? '8%' : '15%' }} />
+              {isAdmin && <col style={{ width: '6%' }} />}
             </colgroup>
             <thead>
               <tr className="border-b border-[#edeef0]">
                 {isAdmin && (
-                  <th className="px-2 py-2 md:px-1.5 md:py-1.5 w-10">
-                    <input
-                      type="checkbox"
-                      checked={sortedSites.length > 0 && selectedSet.size === sortedSites.length}
-                      onChange={selectAllFiltered}
-                      className="rounded border-gray-300"
-                      aria-label="Select all"
-                    />
+                  <th className="px-2 py-2 md:px-1.5 md:py-1.5 w-10 align-middle">
+                    <div className="flex justify-center">
+                      <input
+                        type="checkbox"
+                        checked={sortedSites.length > 0 && selectedSet.size === sortedSites.length}
+                        onChange={selectAllFiltered}
+                        className="rounded border-gray-300"
+                        aria-label="Select all"
+                      />
+                    </div>
                   </th>
                 )}
-                <th className="px-2 py-2 md:px-1.5 md:py-1.5 text-left">
+                <th className="px-2 py-2 md:px-1.5 md:py-1.5 align-middle">
                   <button
                     type="button"
                     onClick={() => handleSiteSort("name")}
-                    className="text-[10px] font-semibold text-gray-700 uppercase tracking-widest flex items-center gap-0.5 hover:text-gray-900 focus:outline-none focus:ring-2 focus:ring-gray-900/20 rounded"
+                    className="text-[10px] font-semibold text-gray-700 uppercase tracking-widest inline-flex items-center justify-center gap-0.5 mx-auto hover:text-gray-900 focus:outline-none focus:ring-2 focus:ring-gray-900/20 rounded"
                   >
                     Site name
                     {siteSortBy === "name" && (siteSortDir === "asc" ? <ChevronUp size={12} /> : <ChevronDown size={12} />)}
                   </button>
                 </th>
-                <th className="hidden md:table-cell px-1.5 py-1.5 text-center">
-                  <button
-                    type="button"
-                    onClick={() => handleSiteSort("address")}
-                    className="text-[10px] font-semibold text-gray-700 uppercase tracking-widest flex items-center gap-0.5 hover:text-gray-900 focus:outline-none focus:ring-2 focus:ring-gray-900/20 rounded"
-                  >
-                    Address
-                    {siteSortBy === "address" && (siteSortDir === "asc" ? <ChevronUp size={12} /> : <ChevronDown size={12} />)}
-                  </button>
-                </th>
-                <th className="hidden md:table-cell px-1.5 py-1.5 text-center">
+                <th className="hidden md:table-cell px-1.5 py-1.5 align-middle">
                   <button
                     type="button"
                     onClick={() => handleSiteSort("state")}
-                    className="text-[10px] font-semibold text-gray-700 uppercase tracking-widest flex items-center gap-0.5 hover:text-gray-900 focus:outline-none focus:ring-2 focus:ring-gray-900/20 rounded"
+                    className="text-[10px] font-semibold text-gray-700 uppercase tracking-widest inline-flex items-center justify-center gap-0.5 mx-auto hover:text-gray-900 focus:outline-none focus:ring-2 focus:ring-gray-900/20 rounded"
                   >
                     State
                     {siteSortBy === "state" && (siteSortDir === "asc" ? <ChevronUp size={12} /> : <ChevronDown size={12} />)}
                   </button>
                 </th>
                 {isAdmin && (
-                  <th className="hidden md:table-cell px-1.5 py-1.5 text-center">
+                  <th className="hidden md:table-cell px-1.5 py-1.5 text-center align-middle">
                     <button
                       type="button"
                       onClick={() => handleSiteSort("monthlyRevenue")}
@@ -1236,10 +1372,16 @@ const SiteManager: React.FC<SiteManagerProps> = ({ onUpdateSite, onViewSite, ref
                     </button>
                   </th>
                 )}
-                <th className="hidden md:table-cell px-1.5 py-1.5 text-[10px] font-semibold text-gray-700 uppercase tracking-widest text-center">Assigned managers</th>
-                <th className="px-2 py-2 md:px-1.5 md:py-1.5 text-[10px] font-semibold text-gray-700 uppercase tracking-widest text-center">Daily hours</th>
-                <th className="hidden md:table-cell px-1.5 py-1.5 text-[10px] font-semibold text-gray-700 uppercase tracking-widest text-center">Weekday rate</th>
-                <th className="px-2 py-2 md:px-1.5 md:py-1.5 text-center">
+                <th className="hidden md:table-cell px-1.5 py-1.5 text-[10px] font-semibold text-gray-700 uppercase tracking-widest text-center align-middle">
+                  Assigned managers
+                </th>
+                <th className="px-2 py-2 md:px-1.5 md:py-1.5 text-[10px] font-semibold text-gray-700 uppercase tracking-widest text-center align-middle">
+                  Daily hours
+                </th>
+                <th className="hidden md:table-cell px-1.5 py-1.5 text-[10px] font-semibold text-gray-700 uppercase tracking-widest align-middle">
+                  Labour rates
+                </th>
+                <th className="px-2 py-2 md:px-1.5 md:py-1.5 text-center align-middle">
                   <button
                     type="button"
                     onClick={() => handleSiteSort("fortnightlyCap")}
@@ -1250,67 +1392,50 @@ const SiteManager: React.FC<SiteManagerProps> = ({ onUpdateSite, onViewSite, ref
                   </button>
                 </th>
                 {isAdmin && (
-                  <th className="px-2 py-2 md:px-1.5 md:py-1.5 text-[10px] font-semibold text-gray-700 uppercase tracking-widest text-right">Actions</th>
+                  <th className="px-2 py-2 md:py-1.5 md:pl-2 md:pr-4 text-[10px] font-semibold text-gray-700 uppercase tracking-widest align-middle">
+                    Actions
+                  </th>
                 )}
               </tr>
             </thead>
             <tbody className="divide-y divide-[#edeef0]">
           {sortedSites.map((site) => {
             const budget = budgetsBySiteId[String(site.id)];
-            const dayHours = budget
-              ? [
-                  { day: "Mon" as const, h: budget.monday },
-                  { day: "Tue" as const, h: budget.tuesday },
-                  { day: "Wed" as const, h: budget.wednesday },
-                  { day: "Thu" as const, h: budget.thursday },
-                  { day: "Fri" as const, h: budget.friday },
-                  { day: "Sat" as const, h: budget.saturday },
-                  { day: "Sun" as const, h: budget.sunday },
-                ]
-              : [];
             const fortnightCap = budget?.fortnightCap ?? 0;
-            const budgetRate = budget?.weekdayLabourRate ?? budget?.budgetLabourRate; // budgetLabourRate = legacy column name
+            const labourRates = effectiveBudgetLabourRates(budget);
 
             return (
               <tr key={site.id} className="transition-colors">
                 {isAdmin && (
-                  <td className="px-2 py-2 md:px-1.5 md:py-1.5 align-top">
-                    <input
-                      type="checkbox"
-                      checked={selectedSet.has(site.id)}
-                      onChange={() => {
-                        setSelectedSiteIds((prev) =>
-                          prev.includes(site.id) ? prev.filter((id) => id !== site.id) : [...prev, site.id]
-                        );
-                      }}
-                      className="rounded border-gray-300"
-                      aria-label={`Select ${site.siteName || "Unnamed site"}`}
-                    />
+                  <td className="px-2 py-2 md:px-1.5 md:py-1.5 align-middle">
+                    <div className="flex justify-center">
+                      <input
+                        type="checkbox"
+                        checked={selectedSet.has(site.id)}
+                        onChange={() => {
+                          setSelectedSiteIds((prev) =>
+                            prev.includes(site.id) ? prev.filter((id) => id !== site.id) : [...prev, site.id]
+                          );
+                        }}
+                        className="rounded border-gray-300"
+                        aria-label={`Select ${site.siteName || "Unnamed site"}`}
+                      />
+                    </div>
                   </td>
                 )}
-                <td className="px-2 py-2 md:px-1.5 md:py-1.5 align-top min-w-[120px]">
+                <td className="px-2 py-2 md:px-1.5 md:py-1.5 align-middle min-w-[120px] text-center">
                   {onViewSite ? (
                     <button
                       type="button"
                       onClick={() => onViewSite(site.id)}
-                      className="text-left text-sm md:text-xs font-bold text-gray-900 break-words hover:underline"
+                      className="block w-full text-sm md:text-xs font-bold text-gray-900 break-words hover:underline text-center"
                     >
                       {site.siteName || "Unnamed site"}
                     </button>
                   ) : (
-                    <span className="text-sm md:text-xs font-bold text-gray-900 break-words">
+                    <span className="block w-full text-sm md:text-xs font-bold text-gray-900 break-words text-center">
                       {site.siteName || "Unnamed site"}
                     </span>
-                  )}
-                </td>
-                <td className="hidden md:table-cell px-1.5 py-1.5 align-top">
-                  {site.address ? (
-                    <span className="text-[11px] text-gray-600 flex items-center gap-0.5 break-words">
-                      <MapPin size={10} className="text-gray-400 shrink-0 flex-shrink-0" />
-                      {site.address}
-                    </span>
-                  ) : (
-                    <span className="text-[11px] text-gray-400">—</span>
                   )}
                 </td>
                 <td className="hidden md:table-cell px-1.5 py-1.5 align-middle text-center whitespace-nowrap">
@@ -1364,64 +1489,47 @@ const SiteManager: React.FC<SiteManagerProps> = ({ onUpdateSite, onViewSite, ref
                     );
                   })()}
                 </td>
-                <td className="px-2 py-2 md:px-1.5 md:py-1.5 align-middle text-center">
-                  {dayHours.length > 0 ? (
-                    <div className="grid grid-cols-7 gap-1 md:gap-px bg-[#edeef0] rounded border border-[#edeef0] overflow-hidden max-w-full md:max-w-[250px] mx-auto">
-                      {dayHours.map(({ day, h }) => (
-                        <div
-                          key={day}
-                          className={`bg-white px-1.5 py-1 md:px-0.5 md:py-0.5 text-center min-w-0 ${
-                            h != null && h > 0 ? "text-blue-700" : "text-gray-400"
-                          }`}
-                          title={h !== undefined ? `${day}: ${h}h` : `${day}: not set`}
-                        >
-                          <span className="block text-[9px] md:text-[8px] font-medium uppercase leading-tight text-gray-500">{day.length > 2 ? day.charAt(0) : day}</span>
-                          <span className="block text-xs md:text-[10px] font-bold tabular-nums mt-0.5">
-                            {h !== undefined ? String(h) : "—"}
-                          </span>
-                        </div>
-                      ))}
-                    </div>
+                <td className="px-2 py-2 md:pl-1.5 md:pr-5 md:py-1.5 align-middle text-center md:min-w-[16rem]">
+                  {budget ? (
+                    <SiteBudgetDayHoursGrid budget={budget} />
                   ) : (
                     <span className="text-[10px] text-gray-400">—</span>
                   )}
                 </td>
-                <td className="hidden md:table-cell px-1.5 py-1.5 align-middle text-center">
-                  {budgetRate != null && budgetRate >= 0 ? (
-                    <span className="text-[11px] font-medium text-gray-700">${Number(budgetRate).toFixed(2)}/hr</span>
-                  ) : (
-                    <span className="text-[10px] text-gray-400">—</span>
-                  )}
+                <td className="hidden md:table-cell py-1.5 align-middle md:min-w-[19rem] px-3 md:pl-6 md:pr-4">
+                  <div className="flex justify-center w-full">
+                    <LabourRatesInlineCell rates={labourRates} />
+                  </div>
                 </td>
                 <td className="px-2 py-2 md:px-1.5 md:py-1.5 align-middle text-center whitespace-nowrap">
                   <span className="text-sm md:text-xs font-bold text-gray-900 inline-block">{fortnightCap}h</span>
                 </td>
                 {isAdmin && (
-                  <td className="px-2 py-2 md:px-1.5 md:py-1.5 align-top text-right whitespace-nowrap">
-                    <div className="flex items-center justify-end gap-0.5 flex-nowrap">
+                  <td className="px-2 py-2 md:py-1.5 md:pl-2 md:pr-4 align-middle whitespace-nowrap">
+                    <div className="flex items-center justify-center gap-0 flex-nowrap">
                       <button
                         onClick={() => openEdit(site)}
-                        className="touch-target p-1.5 sm:p-1 rounded text-blue-600 hover:text-blue-800 hover:bg-blue-50 inline-flex items-center justify-center"
+                        className="p-1 rounded text-blue-600 hover:text-blue-800 hover:bg-blue-50 inline-flex items-center justify-center min-w-[28px] min-h-[28px]"
                         aria-label={`Edit ${site.siteName}`}
                         title="Edit"
                       >
-                        <Edit3 size={18} className="sm:w-3.5 sm:h-3.5 w-[18px] h-[18px]" />
+                        <Edit3 size={15} className="shrink-0" strokeWidth={2} />
                       </button>
                       <button
                         onClick={() => handleSetActive(site, !site.active)}
-                        className="touch-target p-1.5 sm:p-1 rounded text-gray-600 hover:text-gray-900 hover:bg-gray-100 inline-flex items-center justify-center"
+                        className="p-1 rounded text-gray-600 hover:text-gray-900 hover:bg-gray-100 inline-flex items-center justify-center min-w-[28px] min-h-[28px]"
                         aria-label={site.active ? `Deactivate ${site.siteName}` : `Activate ${site.siteName}`}
                         title={site.active ? "Deactivate" : "Activate"}
                       >
-                        {site.active ? <UserMinus size={18} className="sm:w-3.5 sm:h-3.5 w-[18px] h-[18px]" /> : <UserPlus size={18} className="sm:w-3.5 sm:h-3.5 w-[18px] h-[18px]" />}
+                        {site.active ? <UserMinus size={15} className="shrink-0" strokeWidth={2} /> : <UserPlus size={15} className="shrink-0" strokeWidth={2} />}
                       </button>
                       <button
                         onClick={() => handleDeleteSite(site)}
-                        className="touch-target p-1.5 sm:p-1 rounded text-red-600 hover:text-red-800 hover:bg-red-50 inline-flex items-center justify-center"
+                        className="p-1 rounded text-red-600 hover:text-red-800 hover:bg-red-50 inline-flex items-center justify-center min-w-[28px] min-h-[28px]"
                         aria-label={`Delete ${site.siteName}`}
                         title="Delete site"
                       >
-                        <Trash2 size={18} className="sm:w-3.5 sm:h-3.5 w-[18px] h-[18px]" />
+                        <Trash2 size={15} className="shrink-0" strokeWidth={2} />
                       </button>
                     </div>
                   </td>

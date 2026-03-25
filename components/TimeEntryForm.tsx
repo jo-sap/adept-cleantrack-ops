@@ -585,6 +585,73 @@ const TimeEntryForm: React.FC<TimeEntryFormProps> = ({
     };
   }, [isAdmin, isManager, activeSiteId, activeSite, currentPeriod.id, currentPeriod.startDate, adhocJobId]);
 
+  /** Contract work only: block saving hours when actual exceeds per-day plan (or period cap when there is no daily breakdown). */
+  const contractWorkSaveBlockReason = useMemo((): string | null => {
+    if (!activeSite || adhocJobId || isVirtualAdHocContext) return null;
+
+    const isPeriodBudget =
+      activeSite.visit_frequency === "Monthly" || activeSite.visit_frequency === "Fortnightly";
+    const periodCap = activeSite.budgeted_hours_per_fortnight ?? 0;
+    const dailyPlanSum = dates.reduce(
+      (s, d, idx) => s + getPlannedHoursForDate(activeSite, idx, d),
+      0
+    );
+    const usePeriodCap = isPeriodBudget && periodCap > 0 && dailyPlanSum === 0;
+
+    const exceeds = (actual: number, plan: number) =>
+      Math.round(actual * 100) > Math.round(plan * 100);
+
+    if (usePeriodCap) {
+      let siteActualTotal = 0;
+      dates.forEach((date) => {
+        const dateStr = format(date, "yyyy-MM-dd");
+        const dayAssignments = siteEntriesByDate[dateStr] || {};
+        const existingForCleaner = Number(dayAssignments[selectedCleanerId] ?? 0);
+        const existingDayTotal = Object.values(dayAssignments).reduce<number>(
+          (sum, h) => sum + Number(h),
+          0
+        );
+        const draftForCleaner =
+          draftHours[dateStr] !== undefined
+            ? Number(draftHours[dateStr])
+            : existingForCleaner;
+        siteActualTotal += existingDayTotal - existingForCleaner + draftForCleaner;
+      });
+      if (exceeds(siteActualTotal, periodCap)) {
+        return `Contract work cannot exceed the site period budget (${periodCap.toFixed(1)}h). With these entries the site total is ${siteActualTotal.toFixed(1)}h. Reduce hours before saving.`;
+      }
+      return null;
+    }
+
+    for (let idx = 0; idx < dates.length; idx++) {
+      const date = dates[idx];
+      const dateStr = format(date, "yyyy-MM-dd");
+      const sitePlan = getPlannedHoursForDate(activeSite, idx, date);
+      const dayAssignments = siteEntriesByDate[dateStr] || {};
+      const otherHours = Object.entries(dayAssignments)
+        .filter(([cid]) => cid !== selectedCleanerId)
+        .reduce((sum: number, [, h]) => sum + Number(h), 0);
+      const remainingPlan = Math.max(sitePlan - otherHours, 0);
+      const hours =
+        draftHours[dateStr] !== undefined
+          ? Number(draftHours[dateStr])
+          : Number(dayAssignments[selectedCleanerId] ?? 0);
+      if (exceeds(hours, remainingPlan)) {
+        return `On ${format(date, "EEE d MMM")}, hours (${hours.toFixed(2)}h) cannot exceed the plan for this cleaner (${remainingPlan.toFixed(2)}h) on contract work.`;
+      }
+    }
+    return null;
+  }, [
+    activeSite,
+    adhocJobId,
+    isVirtualAdHocContext,
+    dates,
+    draftHours,
+    siteEntriesByDate,
+    selectedCleanerId,
+    getPlannedHoursForDate,
+  ]);
+
   const handleHourChange = (dateStr: string, val: string) => {
     // Allow quarter‑hour (and other 2‑decimal) precision like 4.75
     const hours = val === '' ? 0 : Math.round(parseFloat(val) * 100) / 100;
@@ -604,17 +671,21 @@ const TimeEntryForm: React.FC<TimeEntryFormProps> = ({
     try {
       let anySuccess = false;
       if (hoursWereDirty) {
-        const batchData = (Object.entries(draftHours) as [string, number][]).map(([date, hours]) => ({
-          siteId: isVirtualAdHocContext ? undefined : activeSiteId,
-          cleanerId: selectedCleanerId,
-          date,
-          hours,
-          pay_rate_snapshot: activeSite.cleaner_rates[selectedCleanerId] || activeCleaner.payRatePerHour || 0,
-          adhocJobId: adhocJobId || undefined
-        }));
-        await onSaveBatch(batchData as any);
-        setHasUnsavedChanges(false);
-        anySuccess = true;
+        if (contractWorkSaveBlockReason) {
+          alert(contractWorkSaveBlockReason);
+        } else {
+          const batchData = (Object.entries(draftHours) as [string, number][]).map(([date, hours]) => ({
+            siteId: isVirtualAdHocContext ? undefined : activeSiteId,
+            cleanerId: selectedCleanerId,
+            date,
+            hours,
+            pay_rate_snapshot: activeSite.cleaner_rates[selectedCleanerId] || activeCleaner.payRatePerHour || 0,
+            adhocJobId: adhocJobId || undefined
+          }));
+          await onSaveBatch(batchData as any);
+          setHasUnsavedChanges(false);
+          anySuccess = true;
+        }
       }
 
       const canPersistNote =

@@ -103,6 +103,8 @@ const CleanerManager: React.FC<CleanerManagerProps> = ({ onCleanersRefresh }) =>
   const [cleanerSortBy, setCleanerSortBy] = useState<CleanerSortKey>("name");
   const [workerTypeFilter, setWorkerTypeFilter] = useState<"all" | "cleaner" | "contractor">("all");
 
+  const workerFormIsContractor = (formData.type ?? "cleaner") === "contractor";
+
   /** Resolve site display name from assignment (lookup) or fallback join to CleanTrack Sites. */
   const resolveSiteDisplayName = useCallback(
     (a: SiteCleanerAssignment, sites: Record<string, Site>): string => {
@@ -314,15 +316,21 @@ const CleanerManager: React.FC<CleanerManagerProps> = ({ onCleanersRefresh }) =>
     }
     setSubmitLoading(true);
     setSubmitError(null);
+    const isContractorSave = (formData.type ?? "cleaner") === "contractor";
+    const payrollFields = isContractorSave
+      ? { payRatePerHour: 0, accountName: "", bsb: "", accountNumber: "" }
+      : {
+          payRatePerHour: formData.payRatePerHour ?? 25,
+          accountName: formData.accountName?.trim() ?? "",
+          bsb: formData.bsb?.trim() ?? "",
+          accountNumber: formData.accountNumber?.trim() ?? "",
+        };
     try {
       if (editingCleaner) {
         await updateCleaner(token, editingCleaner.id, {
           cleanerName: formData.cleanerName.trim(),
           type: formData.type ?? "cleaner",
-          payRatePerHour: formData.payRatePerHour ?? 25,
-          accountName: formData.accountName?.trim() ?? "",
-          bsb: formData.bsb?.trim() ?? "",
-          accountNumber: formData.accountNumber?.trim() ?? "",
+          ...payrollFields,
           active: formData.active !== false,
         });
         showToast("Cleaner updated.");
@@ -331,10 +339,7 @@ const CleanerManager: React.FC<CleanerManagerProps> = ({ onCleanersRefresh }) =>
         await createCleaner(token, {
           cleanerName: formData.cleanerName.trim(),
           type: formData.type ?? "cleaner",
-          payRatePerHour: formData.payRatePerHour ?? 25,
-          accountName: formData.accountName?.trim() ?? "",
-          bsb: formData.bsb?.trim() ?? "",
-          accountNumber: formData.accountNumber?.trim() ?? "",
+          ...payrollFields,
           active: formData.active !== false,
         });
         showToast("Cleaner added.");
@@ -1058,57 +1063,61 @@ const CleanerManager: React.FC<CleanerManagerProps> = ({ onCleanersRefresh }) =>
                 </select>
               </div>
 
-              <div className="space-y-1">
-                <label className="text-[10px] font-bold text-gray-400 uppercase tracking-widest">
-                  Pay Rate ($/hr)
-                </label>
-                <input
-                  type="number"
-                  step="0.5"
-                  min={0}
-                  value={formData.payRatePerHour ?? 25}
-                  onChange={(e) =>
-                    setFormData({ ...formData, payRatePerHour: parseFloat(e.target.value) || 0 })
-                  }
-                  className="w-full px-3 py-2 border border-[#edeef0] rounded-md text-sm outline-none focus:ring-1 focus:ring-gray-900"
-                />
-              </div>
+              {!workerFormIsContractor && (
+                <>
+                  <div className="space-y-1">
+                    <label className="text-[10px] font-bold text-gray-400 uppercase tracking-widest">
+                      Pay Rate ($/hr)
+                    </label>
+                    <input
+                      type="number"
+                      step="0.5"
+                      min={0}
+                      value={formData.payRatePerHour ?? 25}
+                      onChange={(e) =>
+                        setFormData({ ...formData, payRatePerHour: parseFloat(e.target.value) || 0 })
+                      }
+                      className="w-full px-3 py-2 border border-[#edeef0] rounded-md text-sm outline-none focus:ring-1 focus:ring-gray-900"
+                    />
+                  </div>
 
-              <div className="bg-gray-50 p-6 rounded-xl space-y-4 border border-[#edeef0]">
-                <h4 className="text-[10px] font-bold text-gray-400 uppercase tracking-widest flex items-center gap-2 mb-2">
-                  <CreditCard size={12} /> Payroll & Banking
-                </h4>
-                <div className="space-y-1">
-                  <label className="text-[10px] font-bold text-gray-500 uppercase">Account Name</label>
-                  <input
-                    type="text"
-                    value={formData.accountName ?? ""}
-                    onChange={(e) => setFormData({ ...formData, accountName: e.target.value })}
-                    className="w-full px-3 py-2 border border-[#edeef0] rounded-md text-sm outline-none focus:bg-white"
-                  />
-                </div>
-                <div className="grid grid-cols-3 gap-4">
-                  <div className="space-y-1 col-span-1">
-                    <label className="text-[10px] font-bold text-gray-500 uppercase">BSB</label>
-                    <input
-                      type="text"
-                      placeholder="000-000"
-                      value={formData.bsb ?? ""}
-                      onChange={(e) => setFormData({ ...formData, bsb: e.target.value })}
-                      className="w-full px-3 py-2 border border-[#edeef0] rounded-md text-sm outline-none focus:bg-white"
-                    />
+                  <div className="bg-gray-50 p-6 rounded-xl space-y-4 border border-[#edeef0]">
+                    <h4 className="text-[10px] font-bold text-gray-400 uppercase tracking-widest flex items-center gap-2 mb-2">
+                      <CreditCard size={12} /> Payroll & Banking
+                    </h4>
+                    <div className="space-y-1">
+                      <label className="text-[10px] font-bold text-gray-500 uppercase">Account Name</label>
+                      <input
+                        type="text"
+                        value={formData.accountName ?? ""}
+                        onChange={(e) => setFormData({ ...formData, accountName: e.target.value })}
+                        className="w-full px-3 py-2 border border-[#edeef0] rounded-md text-sm outline-none focus:bg-white"
+                      />
+                    </div>
+                    <div className="grid grid-cols-3 gap-4">
+                      <div className="space-y-1 col-span-1">
+                        <label className="text-[10px] font-bold text-gray-500 uppercase">BSB</label>
+                        <input
+                          type="text"
+                          placeholder="000-000"
+                          value={formData.bsb ?? ""}
+                          onChange={(e) => setFormData({ ...formData, bsb: e.target.value })}
+                          className="w-full px-3 py-2 border border-[#edeef0] rounded-md text-sm outline-none focus:bg-white"
+                        />
+                      </div>
+                      <div className="space-y-1 col-span-2">
+                        <label className="text-[10px] font-bold text-gray-500 uppercase">Account Number</label>
+                        <input
+                          type="text"
+                          value={formData.accountNumber ?? ""}
+                          onChange={(e) => setFormData({ ...formData, accountNumber: e.target.value })}
+                          className="w-full px-3 py-2 border border-[#edeef0] rounded-md text-sm outline-none focus:bg-white"
+                        />
+                      </div>
+                    </div>
                   </div>
-                  <div className="space-y-1 col-span-2">
-                    <label className="text-[10px] font-bold text-gray-500 uppercase">Account Number</label>
-                    <input
-                      type="text"
-                      value={formData.accountNumber ?? ""}
-                      onChange={(e) => setFormData({ ...formData, accountNumber: e.target.value })}
-                      className="w-full px-3 py-2 border border-[#edeef0] rounded-md text-sm outline-none focus:bg-white"
-                    />
-                  </div>
-                </div>
-              </div>
+                </>
+              )}
 
               <div className="flex items-center gap-2">
                 <input

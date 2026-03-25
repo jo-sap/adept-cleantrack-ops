@@ -75,7 +75,7 @@ const AD_HOC_DISPLAY_NAMES_FOR_WIRING: string[] = [
 ];
 
 export interface AdHocJobFilters {
-  /** Filter by requested date month (year-month string "YYYY-MM"). */
+  /** Filter by calendar month if any of requested / scheduled / completed / recurrence-end date falls in YYYY-MM. */
   month?: string;
   status?: string;
   assignedManagerId?: string;
@@ -154,6 +154,28 @@ function toBool(v: unknown): boolean {
   if (v === true || v === "Yes") return true;
   if (typeof v === "string") return v.trim().toLowerCase() === "yes";
   return false;
+}
+
+/** True if yyyy-MM-dd (or ISO prefix) falls in the given calendar month. */
+function isoDateInMonth(iso: string | null | undefined, year: number, month: number): boolean {
+  if (!iso) return false;
+  const part = String(iso).trim().slice(0, 10);
+  const [y, m] = part.split("-").map(Number);
+  if (!Number.isFinite(y) || !Number.isFinite(m)) return false;
+  return y === year && m === month;
+}
+
+/**
+ * Month filter: include jobs that touch this month on any primary date (not request-only).
+ * Request-only matching hid once-off work scheduled in March when Requested Date was another month.
+ */
+function adHocJobTouchesMonth(job: AdHocJob, year: number, month: number): boolean {
+  return (
+    isoDateInMonth(job.requestedDate, year, month) ||
+    isoDateInMonth(job.scheduledDate, year, month) ||
+    isoDateInMonth(job.completedDate, year, month) ||
+    isoDateInMonth(job.recurrenceEndDate, year, month)
+  );
 }
 
 function getStr(f: Record<string, unknown>, ...keys: string[]): string {
@@ -495,12 +517,7 @@ export async function getAdHocJobs(
 
   if (filters?.month) {
     const [y, m] = filters.month.split("-").map(Number);
-    list = list.filter((j) => {
-      const d = j.requestedDate;
-      if (!d) return false;
-      const [ey, em] = d.split("-").map(Number);
-      return ey === y && em === m;
-    });
+    list = list.filter((j) => adHocJobTouchesMonth(j, y, m));
     if (DEBUG_ADHOC) console.log("[CleanTrack Ad Hoc Jobs] after month filter:", filters.month, "count:", list.length);
   }
   if (filters?.status) {
@@ -636,18 +653,44 @@ function payloadToFields(
     if (!k || value === undefined) return;
     fields[k] = value;
   };
-  set("Requested By Name", "Requested_x0020_By_x0020_Name", payload.requestedByName ?? "");
-  set("Requested By Email", "Requested_x0020_By_x0020_Email", payload.requestedByEmail ?? "");
-  set("Request Channel", "Request_x0020_Channel", payload.requestChannel ?? "");
-  set("Requested Date", "Requested_x0020_Date", payload.requestedDate ?? null);
-  set("Scheduled Date", "Scheduled_x0020_Date", payload.scheduledDate ?? null);
-  set("Completed Date", "Completed_x0020_Date", payload.completedDate ?? null);
-  set("Status", "Status", payload.status ?? "Requested");
-  set("Budgeted Hours", "Budgeted_x0020_Hours", payload.budgetedHours ?? null);
+  /**
+   * Partial PATCHes (e.g. only `{ approvalProofUploaded: true }` after file upload) must not
+   * send other keys; `undefined ?? null` would otherwise clear dates, money fields, and text in SharePoint.
+   */
+  if (payload.requestedByName !== undefined) {
+    set("Requested By Name", "Requested_x0020_By_x0020_Name", payload.requestedByName ?? "");
+  }
+  if (payload.requestedByEmail !== undefined) {
+    set("Requested By Email", "Requested_x0020_By_x0020_Email", payload.requestedByEmail ?? "");
+  }
+  if (payload.requestChannel !== undefined) {
+    set("Request Channel", "Request_x0020_Channel", payload.requestChannel ?? "");
+  }
+  if (payload.requestedDate !== undefined) {
+    set("Requested Date", "Requested_x0020_Date", payload.requestedDate ?? null);
+  }
+  if (payload.scheduledDate !== undefined) {
+    set("Scheduled Date", "Scheduled_x0020_Date", payload.scheduledDate ?? null);
+  }
+  if (payload.completedDate !== undefined) {
+    set("Completed Date", "Completed_x0020_Date", payload.completedDate ?? null);
+  }
+  if (payload.status !== undefined) {
+    set("Status", "Status", payload.status ?? "Requested");
+  }
+  if (payload.budgetedHours !== undefined) {
+    set("Budgeted Hours", "Budgeted_x0020_Hours", payload.budgetedHours ?? null);
+  }
   // Schedule / recurrence / overrides — only if columns exist (this tenant may omit or use different internals).
-  setIfMapped("Recurrence Frequency", payload.recurrenceFrequency ?? null);
-  setIfMapped("Recurrence End Date", payload.recurrenceEndDate ?? null);
-  setIfMapped("Hours Per Service Day", payload.hoursPerServiceDay ?? null);
+  if (payload.recurrenceFrequency !== undefined) {
+    setIfMapped("Recurrence Frequency", payload.recurrenceFrequency ?? null);
+  }
+  if (payload.recurrenceEndDate !== undefined) {
+    setIfMapped("Recurrence End Date", payload.recurrenceEndDate ?? null);
+  }
+  if (payload.hoursPerServiceDay !== undefined) {
+    setIfMapped("Hours Per Service Day", payload.hoursPerServiceDay ?? null);
+  }
   if (payload.weekdayHours !== undefined) {
     const k = map["Weekday Hours"];
     if (k) fields[k] = payload.weekdayHours ? JSON.stringify(payload.weekdayHours) : "";
@@ -656,30 +699,76 @@ function payloadToFields(
     const k = map["Recurrence Weekdays"];
     if (k) fields[k] = payload.recurrenceWeekdays ? payload.recurrenceWeekdays.join(",") : "";
   }
-  setIfMapped("Monthly Mode", payload.monthlyMode ?? null);
-  setIfMapped("Monthly Day Of Month", payload.monthlyDayOfMonth ?? null);
-  setIfMapped("Monthly Week Of Month", payload.monthlyWeekOfMonth ?? null);
-  setIfMapped("Monthly Weekday", payload.monthlyWeekday ?? null);
-  setIfMapped("Monthly Hours", payload.monthlyHours ?? null);
+  if (payload.monthlyMode !== undefined) {
+    setIfMapped("Monthly Mode", payload.monthlyMode ?? null);
+  }
+  if (payload.monthlyDayOfMonth !== undefined) {
+    setIfMapped("Monthly Day Of Month", payload.monthlyDayOfMonth ?? null);
+  }
+  if (payload.monthlyWeekOfMonth !== undefined) {
+    setIfMapped("Monthly Week Of Month", payload.monthlyWeekOfMonth ?? null);
+  }
+  if (payload.monthlyWeekday !== undefined) {
+    setIfMapped("Monthly Weekday", payload.monthlyWeekday ?? null);
+  }
+  if (payload.monthlyHours !== undefined) {
+    setIfMapped("Monthly Hours", payload.monthlyHours ?? null);
+  }
 
-  setIfMapped("Weekday Charge Rate Override", payload.weekdayChargeRateOverride ?? null);
-  setIfMapped("Saturday Charge Rate Override", payload.saturdayChargeRateOverride ?? null);
-  setIfMapped("Sunday Charge Rate Override", payload.sundayChargeRateOverride ?? null);
-  setIfMapped("Public Holiday Charge Rate Override", payload.publicHolidayChargeRateOverride ?? null);
-  setIfMapped("Weekday Cost Rate Override", payload.weekdayCostRateOverride ?? null);
-  setIfMapped("Saturday Cost Rate Override", payload.saturdayCostRateOverride ?? null);
-  setIfMapped("Sunday Cost Rate Override", payload.sundayCostRateOverride ?? null);
-  setIfMapped("Public Holiday Cost Rate Override", payload.publicHolidayCostRateOverride ?? null);
-  set("Description", "Description", payload.description ?? "");
-  set("Actual Hours", "Actual_x0020_Hours", payload.actualHours ?? null);
-  set("Service Provider", "Service_x0020_Provider", payload.serviceProvider ?? "");
-  set("Charge Rate Per Hour", "Charge_x0020_Rate_x0020_Per_x0020_Hour", payload.chargeRatePerHour ?? null);
-  set("Cost Rate Per Hour", "Cost_x0020_Rate_x0020_Per_x0020_Hour", payload.costRatePerHour ?? null);
-  set("Charge", "Charge", payload.charge ?? null);
-  set("Cost", "Cost", payload.cost ?? null);
-  set("Gross Profit", "Gross_x0020_Profit", payload.grossProfit ?? null);
-  set("Markup %", "Markup_x0020__x0025_", payload.markupPercent ?? null);
-  set("GP %", "GP_x0020__x0025_", payload.gpPercent ?? null);
+  if (payload.weekdayChargeRateOverride !== undefined) {
+    setIfMapped("Weekday Charge Rate Override", payload.weekdayChargeRateOverride ?? null);
+  }
+  if (payload.saturdayChargeRateOverride !== undefined) {
+    setIfMapped("Saturday Charge Rate Override", payload.saturdayChargeRateOverride ?? null);
+  }
+  if (payload.sundayChargeRateOverride !== undefined) {
+    setIfMapped("Sunday Charge Rate Override", payload.sundayChargeRateOverride ?? null);
+  }
+  if (payload.publicHolidayChargeRateOverride !== undefined) {
+    setIfMapped("Public Holiday Charge Rate Override", payload.publicHolidayChargeRateOverride ?? null);
+  }
+  if (payload.weekdayCostRateOverride !== undefined) {
+    setIfMapped("Weekday Cost Rate Override", payload.weekdayCostRateOverride ?? null);
+  }
+  if (payload.saturdayCostRateOverride !== undefined) {
+    setIfMapped("Saturday Cost Rate Override", payload.saturdayCostRateOverride ?? null);
+  }
+  if (payload.sundayCostRateOverride !== undefined) {
+    setIfMapped("Sunday Cost Rate Override", payload.sundayCostRateOverride ?? null);
+  }
+  if (payload.publicHolidayCostRateOverride !== undefined) {
+    setIfMapped("Public Holiday Cost Rate Override", payload.publicHolidayCostRateOverride ?? null);
+  }
+  if (payload.description !== undefined) {
+    set("Description", "Description", payload.description ?? "");
+  }
+  if (payload.actualHours !== undefined) {
+    set("Actual Hours", "Actual_x0020_Hours", payload.actualHours ?? null);
+  }
+  if (payload.serviceProvider !== undefined) {
+    set("Service Provider", "Service_x0020_Provider", payload.serviceProvider ?? "");
+  }
+  if (payload.chargeRatePerHour !== undefined) {
+    set("Charge Rate Per Hour", "Charge_x0020_Rate_x0020_Per_x0020_Hour", payload.chargeRatePerHour ?? null);
+  }
+  if (payload.costRatePerHour !== undefined) {
+    set("Cost Rate Per Hour", "Cost_x0020_Rate_x0020_Per_x0020_Hour", payload.costRatePerHour ?? null);
+  }
+  if (payload.charge !== undefined) {
+    set("Charge", "Charge", payload.charge ?? null);
+  }
+  if (payload.cost !== undefined) {
+    set("Cost", "Cost", payload.cost ?? null);
+  }
+  if (payload.grossProfit !== undefined) {
+    set("Gross Profit", "Gross_x0020_Profit", payload.grossProfit ?? null);
+  }
+  if (payload.markupPercent !== undefined) {
+    set("Markup %", "Markup_x0020__x0025_", payload.markupPercent ?? null);
+  }
+  if (payload.gpPercent !== undefined) {
+    set("GP %", "GP_x0020__x0025_", payload.gpPercent ?? null);
+  }
   if (payload.approvalProofRequired !== undefined) {
     setIfMapped("Approval Proof Required", payload.approvalProofRequired);
     if (!map["Approval Proof Required"] && map["Approval Method"] && payload.approvalMethod === undefined) {
@@ -689,14 +778,20 @@ function payloadToFields(
   if (payload.approvalMethod !== undefined) {
     setIfMapped("Approval Method", payload.approvalMethod ?? "");
   }
-  set("Approval Proof Uploaded", "Approval_x0020_Proof_x0020_Uploaded", payload.approvalProofUploaded ?? false);
+  if (payload.approvalProofUploaded !== undefined) {
+    set("Approval Proof Uploaded", "Approval_x0020_Proof_x0020_Uploaded", payload.approvalProofUploaded ?? false);
+  }
   // Only send Approval Reference if we have a trusted internal name from SharePoint;
   // avoid hard-coded fallback that may not exist.
   if (map["Approval Reference"] && payload.approvalReference !== undefined) {
     fields[map["Approval Reference"]] = payload.approvalReference ?? "";
   }
-  set("Notes for Information", "Notes_x0020_for_x0020_Information", payload.notesForInformation ?? "");
-  set("Active", "Active", payload.active !== false);
+  if (payload.notesForInformation !== undefined) {
+    set("Notes for Information", "Notes_x0020_for_x0020_Information", payload.notesForInformation ?? "");
+  }
+  if (payload.active !== undefined) {
+    set("Active", "Active", payload.active !== false);
+  }
   if (payload.timesheetApplicable !== undefined) {
     setIfMapped("Timesheet Applicable", payload.timesheetApplicable);
   }

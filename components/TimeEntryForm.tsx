@@ -455,6 +455,12 @@ const TimeEntryForm: React.FC<TimeEntryFormProps> = ({
       setAdhocJobId(activeAdHocCardJobId ?? adhocJobId);
       return;
     }
+    if (activeAdHocCardJobId) {
+      // If the user entered from an Ad Hoc card, keep this context locked to that Ad Hoc job.
+      // Contract entries for the same site/cleaner must not flip the screen back to contract mode.
+      setAdhocJobId(activeAdHocCardJobId);
+      return;
+    }
     if (!activeAdHocCardJobId) {
       setAdhocJobId(null);
       return;
@@ -473,7 +479,7 @@ const TimeEntryForm: React.FC<TimeEntryFormProps> = ({
     }
     const firstAdhoc = inPeriod.find((e) => !!e.adhocJobId);
     setAdhocJobId(firstAdhoc?.adhocJobId ?? null);
-  }, [activeSiteId, selectedCleanerId, currentPeriod.id, entries, dates, isVirtualAdHocContext, activeAdHocCardJobId, adhocJobId]);
+  }, [activeSiteId, selectedCleanerId, isVirtualAdHocContext, activeAdHocCardJobId, adhocJobId]);
 
   // Load draft hours for the current (site, cleaner, ad hoc context) selection.
   useEffect(() => {
@@ -667,7 +673,24 @@ const TimeEntryForm: React.FC<TimeEntryFormProps> = ({
 
   const handleAutoFill = () => {
     if (!activeSite || !selectedCleanerId) return;
-    if (adhocJobId) return;
+    if (adhocJobId) {
+      // Ad Hoc mode: fill directly from planned occurrences in this fortnight.
+      const next: Record<string, number> = { ...draftHours };
+      let changed = false;
+      dates.forEach((date) => {
+        const dateStr = format(date, "yyyy-MM-dd");
+        const planned = activeAdHocPlannedByDate[dateStr] ?? 0;
+        if ((next[dateStr] ?? 0) !== planned) {
+          next[dateStr] = planned;
+          changed = true;
+        }
+      });
+      if (changed) {
+        setDraftHours(next);
+        setHasUnsavedChanges(true);
+      }
+      return;
+    }
     const isPeriodBudget = activeSite.visit_frequency === "Monthly" || activeSite.visit_frequency === "Fortnightly";
     const periodCap = activeSite.budgeted_hours_per_fortnight ?? 0;
     const dailySum = dates.reduce((s, d) => s + (activeSite.daily_budgets[getDay(d)] || 0), 0);
@@ -970,6 +993,21 @@ const TimeEntryForm: React.FC<TimeEntryFormProps> = ({
                   </div>
                 )}
               </div>
+              {adhocMode && (
+                <div className="sm:col-span-2 rounded-lg border border-amber-100 bg-amber-50/60 px-3 py-2 text-[11px] text-gray-700 leading-snug">
+                  {activeAdHocJob?.serviceProvider?.trim() ? (
+                    <span className="block mb-1">
+                      <span className="font-bold text-gray-800">Service provider</span> on this job:{" "}
+                      <span className="font-semibold">{activeAdHocJob.serviceProvider.trim()}</span>.
+                    </span>
+                  ) : null}
+                  Hours and payroll exports use the <span className="font-semibold">cleaner</span> you select
+                  above. For subcontractors, add them as a{" "}
+                  <span className="font-semibold">Cleaner</span> in CleanTrack (pay rate, bank details) and pick
+                  them here. The job&apos;s cost rate drives <span className="font-semibold">Est. pay</span> on
+                  this screen; the saved pay rate snapshot comes from the cleaner profile when you save.
+                </div>
+              )}
             </div>
           );
         })()}
@@ -1080,11 +1118,17 @@ const TimeEntryForm: React.FC<TimeEntryFormProps> = ({
                 const remainingPlan = Math.max(sitePlan - otherHours, 0);
                 const planned = isAdHoc ? (activeAdHocPlannedByDate[dateStr] ?? 0) : remainingPlan;
                 const hours = draftHours[dateStr] || 0;
-                const status = isAdHoc
-                  ? { border: "border-[#edeef0]", bg: "bg-gray-50", dot: "bg-gray-300", color: "text-gray-600", label: "Adhoc" }
-                  : noServicePeriod
-                    ? { border: "border-green-200", bg: "bg-green-50", dot: "bg-green-500", color: "text-green-600", label: "On target" }
-                  : getDayStatus(planned, hours);
+                // Same plan vs actual styling as contract sites so scheduled ad hoc days show Missing / On target / etc.
+                const status =
+                  !isAdHoc && noServicePeriod
+                    ? {
+                        border: "border-green-200",
+                        bg: "bg-green-50",
+                        dot: "bg-green-500",
+                        color: "text-green-600",
+                        label: "On target",
+                      }
+                    : getDayStatus(planned, hours);
                 const existingForThisCleaner = dayAssignments[selectedCleanerId] || 0;
                 const fullyAllocatedToOthers =
                   !isAdHoc && sitePlan > 0 && remainingPlan <= 0 && existingForThisCleaner === 0;
@@ -1281,6 +1325,11 @@ const TimeEntryForm: React.FC<TimeEntryFormProps> = ({
                     <div className="min-w-0">
                       <h4 className="text-sm font-bold text-gray-900 truncate">{job.jobName}</h4>
                       <p className="text-[10px] text-gray-500 truncate uppercase font-bold">{siteLabel}</p>
+                      {job.serviceProvider?.trim() ? (
+                        <p className="text-[10px] text-gray-600 truncate mt-0.5">
+                          Provider: {job.serviceProvider.trim()}
+                        </p>
+                      ) : null}
                     </div>
                   </div>
                   <div className="text-right border-l border-amber-100 pl-6 min-w-[132px] space-y-1.5 shrink-0">
@@ -1340,7 +1389,11 @@ const TimeEntryForm: React.FC<TimeEntryFormProps> = ({
           return (
           <div
             key={site.id}
-            onClick={() => setActiveSiteId(site.id)}
+            onClick={() => {
+              setActiveSiteId(site.id);
+              setActiveAdHocCardJobId(null);
+              setAdhocJobId(null);
+            }}
             className={cardClasses.join(" ")}
           >
             <div className="flex items-center gap-2 sm:gap-4 min-w-0 flex-1">

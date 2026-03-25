@@ -23,6 +23,7 @@ import { createSiteBudget, getSiteBudgets, updateSiteBudget, type SiteBudgetHour
 import { getSiteCleanerAssignments } from "../repositories/assignedCleanersRepo";
 import { normalizeListItemId } from "../lib/sharepoint";
 import { AU_STATES } from "../lib/auStates";
+import { AppSelect } from "./ui";
 const DAY_LABELS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"] as const;
 type DayKey = (typeof DAY_LABELS)[number];
 /** Display order: Monday first, Sunday last. */
@@ -104,10 +105,10 @@ function LabourRatesInlineCell({ rates }: { rates: BudgetLabourRatesDisplay }) {
   );
   return (
     <div
-      className="text-[11px] md:text-[10px] text-gray-800 tabular-nums leading-snug whitespace-normal md:whitespace-nowrap"
+      className="text-[11px] md:text-[10px] text-gray-800 tabular-nums leading-snug whitespace-normal"
       title={`Mon–Fri ${fmt(rates.weekday)} · Sat ${fmt(rates.saturday)} · Sun ${fmt(rates.sunday)} · PH ${fmt(rates.ph)} (per hour)`}
     >
-      <span className="inline-flex flex-wrap md:flex-nowrap items-baseline gap-x-2 gap-y-0.5">
+      <span className="inline-flex flex-wrap items-baseline justify-center gap-x-1 gap-y-0.5">
         {piece("MF", "Monday–Friday", rates.weekday)}
         <span className="text-gray-300 select-none" aria-hidden>
           ·
@@ -160,7 +161,7 @@ function SiteBudgetDayHoursGrid({ budget }: { budget: SiteBudgetHours }) {
     return (
       <div
         key={day}
-        className={`min-h-[2.65rem] px-1 py-1 flex flex-col items-center justify-center text-center ${
+        className={`min-h-[2.65rem] min-w-0 px-0.5 sm:px-1 py-1 flex flex-col items-center justify-center text-center ${
           filled ? "text-blue-700" : "text-gray-400"
         } bg-white`}
         title={h !== undefined ? `${day}: ${h}h` : `${day}: not set`}
@@ -178,7 +179,7 @@ function SiteBudgetDayHoursGrid({ budget }: { budget: SiteBudgetHours }) {
       {label ? (
         <div className="text-[9px] font-semibold text-gray-400 uppercase tracking-wider mb-0.5 text-center">{label}</div>
       ) : null}
-      <div className="grid grid-cols-7 gap-px bg-[#edeef0] rounded-md border border-[#edeef0] overflow-hidden shadow-sm">
+      <div className="grid min-w-0 grid-cols-7 gap-px bg-[#edeef0] rounded-md border border-[#edeef0] overflow-hidden shadow-sm">
         {days.map((d) => cell(d))}
       </div>
     </div>
@@ -190,7 +191,7 @@ function SiteBudgetDayHoursGrid({ budget }: { budget: SiteBudgetHours }) {
     : `Planned hours per day: ${ariaSummary(week1)}`;
 
   return (
-    <div className="w-full max-w-[min(100%,22rem)] md:max-w-[26rem] mx-auto space-y-1.5" aria-label={ariaLabel}>
+    <div className="w-full min-w-0 max-w-full mx-auto space-y-1.5" aria-label={ariaLabel}>
       {showTwoWeekRows ? (
         <>
           {row(week1, "Week 1")}
@@ -1150,7 +1151,7 @@ const SiteManager: React.FC<SiteManagerProps> = ({ onUpdateSite, onViewSite, ref
   };
 
   return (
-    <div className="space-y-6 sm:space-y-8">
+    <div className="space-y-6 sm:space-y-8 min-w-0 max-w-full">
       <div className="flex flex-col sm:flex-row sm:justify-between sm:items-end gap-4">
         <div className="min-w-0">
           <h2 className="text-[20px] sm:text-[22px] font-semibold text-gray-900">
@@ -1312,8 +1313,8 @@ const SiteManager: React.FC<SiteManagerProps> = ({ onUpdateSite, onViewSite, ref
             );
           })}
         </div>
-        <div className="hidden md:block so-table bg-white table-scroll-mobile">
-          <table className="w-full border-collapse min-w-[860px] table-auto md:table-fixed md:min-w-[1180px] text-center">
+        <div className="hidden md:block so-table bg-white w-full min-w-0 max-w-full">
+          <table className="w-full min-w-0 max-w-full border-collapse table-auto md:table-fixed text-center">
             <colgroup className="hidden md:contents">
               {isAdmin && <col style={{ width: '4%' }} />}
               <col style={{ width: isAdmin ? '15%' : '18%' }} />
@@ -1423,7 +1424,7 @@ const SiteManager: React.FC<SiteManagerProps> = ({ onUpdateSite, onViewSite, ref
                     </div>
                   </td>
                 )}
-                <td className="px-2 py-2 md:px-1.5 md:py-1.5 align-middle min-w-[120px] text-center">
+                <td className="px-2 py-2 md:px-1.5 md:py-1.5 align-middle min-w-0 text-center">
                   {onViewSite ? (
                     <button
                       type="button"
@@ -1489,19 +1490,19 @@ const SiteManager: React.FC<SiteManagerProps> = ({ onUpdateSite, onViewSite, ref
                     );
                   })()}
                 </td>
-                <td className="px-2 py-2 md:pl-1.5 md:pr-5 md:py-1.5 align-middle text-center md:min-w-[16rem]">
+                <td className="px-2 py-2 md:pl-1.5 md:pr-5 md:py-1.5 align-middle text-center min-w-0">
                   {budget ? (
                     <SiteBudgetDayHoursGrid budget={budget} />
                   ) : (
                     <span className="text-[10px] text-gray-400">—</span>
                   )}
                 </td>
-                <td className="hidden md:table-cell py-1.5 align-middle md:min-w-[19rem] px-3 md:pl-6 md:pr-4">
+                <td className="hidden md:table-cell py-1.5 align-middle min-w-0 px-3 md:pl-6 md:pr-4">
                   <div className="flex justify-center w-full">
                     <LabourRatesInlineCell rates={labourRates} />
                   </div>
                 </td>
-                <td className="px-2 py-2 md:px-1.5 md:py-1.5 align-middle text-center whitespace-nowrap">
+                <td className="px-2 py-2 md:px-1.5 md:py-1.5 align-middle text-center whitespace-nowrap min-w-0">
                   <span className="text-sm md:text-xs font-bold text-gray-900 inline-block">{fortnightCap}h</span>
                 </td>
                 {isAdmin && (
@@ -1637,19 +1638,16 @@ const SiteManager: React.FC<SiteManagerProps> = ({ onUpdateSite, onViewSite, ref
                     </div>
                   </div>
                   <div>
-                    <label className="block text-xs font-bold text-gray-500 uppercase tracking-widest mb-1">
-                      State
-                    </label>
-                    <select
+                    <AppSelect
+                      label="State"
                       value={form.state}
-                      onChange={(e) => setForm((f) => ({ ...f, state: e.target.value }))}
-                      className="w-full border border-[#edeef0] rounded-lg px-3 py-2 text-sm"
-                    >
-                      <option value="">—</option>
-                      {AU_STATES.map((s) => (
-                        <option key={s} value={s}>{s}</option>
-                      ))}
-                    </select>
+                      onChange={(v) => setForm((f) => ({ ...f, state: v }))}
+                      options={[
+                        { value: "", label: "—" },
+                        ...AU_STATES.map((s) => ({ value: s, label: s })),
+                      ]}
+                      placeholder="—"
+                    />
                   </div>
                   <div className="flex items-center gap-2">
                     <input
@@ -1668,24 +1666,22 @@ const SiteManager: React.FC<SiteManagerProps> = ({ onUpdateSite, onViewSite, ref
                 <h4 className="text-xs font-bold text-gray-500 uppercase tracking-widest mb-3">Visit pattern</h4>
                 <div className="space-y-3">
                   <div>
-                    <label className="block text-xs font-bold text-gray-500 uppercase tracking-widest mb-1">
-                      Visit frequency
-                    </label>
-                    <select
+                    <AppSelect
+                      label="Visit frequency"
                       value={visitFrequency}
-                      onChange={(e) => {
-                        const next = e.target.value as VisitFreq;
+                      onChange={(v) => {
+                        const next = v as VisitFreq;
                         setVisitFrequency(next);
                         if (next === "Fortnightly") {
                           if (sumDayHours(dailyHoursWeek2) === 0) setDailyHoursWeek2({ ...dailyHours });
                         }
                       }}
-                      className="w-full border border-[#edeef0] rounded-lg px-3 py-2 text-sm"
-                    >
-                      <option value="Weekly">Weekly</option>
-                      <option value="Fortnightly">Fortnightly</option>
-                      <option value="Monthly">Monthly</option>
-                    </select>
+                      options={[
+                        { value: "Weekly", label: "Weekly" },
+                        { value: "Fortnightly", label: "Fortnightly" },
+                        { value: "Monthly", label: "Monthly" },
+                      ]}
+                    />
                   </div>
                   {visitFrequency === "Monthly" && (
                     <div>
@@ -1884,22 +1880,19 @@ const SiteManager: React.FC<SiteManagerProps> = ({ onUpdateSite, onViewSite, ref
                           {form.state.trim() ? form.state.trim().toUpperCase() : "—"}
                         </span>
                       </div>
-                      <div>
-                        <label className="block text-[10px] font-bold text-gray-400 uppercase mb-1">Year</label>
-                        <select
-                          value={noServiceYear}
-                          onChange={(e) => {
-                            setNoServiceYear(Number(e.target.value));
+                      <div className="min-w-[6rem]">
+                        <AppSelect
+                          label="Year"
+                          value={String(noServiceYear)}
+                          onChange={(v) => {
+                            setNoServiceYear(Number(v));
                             setNoServiceHolidayMessage(null);
                           }}
-                          className="border border-[#edeef0] rounded-lg px-2 py-1.5 text-sm bg-white min-w-[5.5rem]"
-                        >
-                          {schoolHolidayYearOptions.map((y) => (
-                            <option key={y} value={y}>
-                              {y}
-                            </option>
-                          ))}
-                        </select>
+                          options={schoolHolidayYearOptions.map((y) => ({
+                            value: String(y),
+                            label: String(y),
+                          }))}
+                        />
                       </div>
                       <button
                         type="button"

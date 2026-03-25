@@ -24,6 +24,7 @@ import {
 } from '../repositories/timesheetNotesRepo';
 import { generateAdHocOccurrencesForRange, occurrencesToHoursByDate, adHocJobHasPlannedWorkInRange } from '../lib/adhocSchedule';
 import TimesheetPeriodNotesPanel from './TimesheetPeriodNotesPanel';
+import { AppSelect } from './ui';
 
 interface TimeEntryFormProps {
   sites: Site[];
@@ -1018,29 +1019,20 @@ const TimeEntryForm: React.FC<TimeEntryFormProps> = ({
           const options = personnelIds
             .map(cid => cleaners.find(c => c.id === cid))
             .filter((c): c is Cleaner => !!c);
-          console.log('[Timesheets] cleaner dropdown options', {
-            siteId: activeSite.id,
-            assignedCleanerIds: personnelIds,
-            optionIds: options.map(o => o.id),
-          });
+          const cleanerSelectOptions = options.map((c) => ({
+            value: c.id,
+            label: `${c.firstName} ${c.lastName}`.trim() || c.id,
+          }));
           return (
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 border-b border-[#edeef0] pt-2 pb-2">
               <div className="min-w-0 sm:max-w-xs">
-                <label className="block text-[10px] font-bold text-gray-400 uppercase mb-1">
-                  {adhocMode ? "Cleaner" : "Personnel"}
-                </label>
-                <select
+                <AppSelect
+                  label={adhocMode ? "Cleaner" : "Personnel"}
                   value={selectedCleanerId}
-                  onChange={(e) => setSelectedCleanerId(e.target.value)}
-                  className="w-full so-input bg-white px-3 py-2 text-sm"
-                >
-                  {!selectedCleanerId && <option value="">Select cleaner…</option>}
-                  {options.map(c => (
-                    <option key={c.id} value={c.id}>
-                      {c.firstName} {c.lastName}
-                    </option>
-                  ))}
-                </select>
+                  onChange={setSelectedCleanerId}
+                  options={cleanerSelectOptions}
+                  placeholder="Select cleaner…"
+                />
               </div>
               <div className="min-w-0 sm:max-w-xs">
                 <div className="mb-1 flex items-center justify-between gap-2">

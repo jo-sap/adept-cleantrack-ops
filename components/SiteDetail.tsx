@@ -8,6 +8,7 @@ import { useRole } from '../contexts/RoleContext';
 import { useAppAuth } from '../contexts/AppAuthContext';
 import { getGraphAccessToken } from '../lib/graph';
 import { createSiteCleanerAssignment, getSiteCleanerAssignments, updateSiteCleanerAssignment } from '../repositories/assignedCleanersRepo';
+import { listAllTimesheetPeriodNotes, pickSiteNoteForPeriod } from '../repositories/timesheetNotesRepo';
 
 interface SiteDetailProps {
   site: Site;
@@ -34,6 +35,8 @@ const SiteDetail: React.FC<SiteDetailProps> = ({ site, cleaners, entries, curren
   const [assignCleanerId, setAssignCleanerId] = useState<string>('');
   const [assignCleanerSearch, setAssignCleanerSearch] = useState<string>('');
   const [savingAssignment, setSavingAssignment] = useState(false);
+  const [managerNoteBody, setManagerNoteBody] = useState('');
+  const [managerNoteLoading, setManagerNoteLoading] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
@@ -70,6 +73,38 @@ const SiteDetail: React.FC<SiteDetailProps> = ({ site, cleaners, entries, curren
       cancelled = true;
     };
   }, [site.id]);
+
+  useEffect(() => {
+    let cancelled = false;
+    setManagerNoteLoading(true);
+    getGraphAccessToken().then(async (token) => {
+      if (!token || cancelled) {
+        if (!cancelled) {
+          setManagerNoteBody('');
+          setManagerNoteLoading(false);
+        }
+        return;
+      }
+      try {
+        const { notes, listExists } = await listAllTimesheetPeriodNotes(token);
+        if (cancelled) return;
+        if (!listExists) {
+          setManagerNoteBody('');
+          return;
+        }
+        const periodYmd = format(currentPeriod.startDate, 'yyyy-MM-dd');
+        const picked = pickSiteNoteForPeriod(notes, site.id, periodYmd, site.name);
+        setManagerNoteBody(picked?.noteBody?.trim() ?? '');
+      } catch {
+        if (!cancelled) setManagerNoteBody('');
+      } finally {
+        if (!cancelled) setManagerNoteLoading(false);
+      }
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [site.id, site.name, currentPeriod.startDate]);
 
   const periodEntries = useMemo(() => entries.filter(e => {
     const date = new Date(e.date);
@@ -245,6 +280,24 @@ const SiteDetail: React.FC<SiteDetailProps> = ({ site, cleaners, entries, curren
           </div>
         </div>
       </div>
+
+      {(managerNoteLoading || managerNoteBody) && (
+        <div className="border border-[#edeef0] rounded-lg bg-white shadow-sm p-4 space-y-2">
+          <div className="flex items-center gap-2">
+            <CalendarDays className="text-gray-400" size={16} />
+            <h3 className="text-[9px] font-bold text-gray-500 uppercase tracking-widest">
+              Manager Note (This Period)
+            </h3>
+          </div>
+          {managerNoteLoading ? (
+            <p className="text-xs text-gray-400">Loading manager note…</p>
+          ) : (
+            <p className="text-sm text-gray-800 whitespace-pre-wrap leading-relaxed">
+              {managerNoteBody}
+            </p>
+          )}
+        </div>
+      )}
 
       <div className="border border-[#edeef0] rounded-lg bg-white shadow-sm p-6 space-y-4">
         <div className="flex items-center justify-between gap-2">

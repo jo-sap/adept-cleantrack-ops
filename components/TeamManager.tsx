@@ -4,6 +4,7 @@ import { useRole } from "../contexts/RoleContext";
 import { useAppAuth } from "../contexts/AppAuthContext";
 import { getGraphAccessToken } from "../lib/graph";
 import { getCleanTrackUsers, upsertUser } from "../repositories/usersRepo";
+import { AppSelect } from "./ui";
 
 type RoleOption = "Admin" | "Manager";
 
@@ -162,22 +163,22 @@ const TeamManager: React.FC = () => {
             />
           </div>
         </div>
-        <div className="flex flex-wrap items-center gap-4">
-          <div>
-            <label className="block text-[10px] font-bold text-gray-400 uppercase mb-1">
-              Role
-            </label>
-            <select
+        <div className="flex flex-wrap items-end gap-3">
+          <div className="min-w-[10rem]">
+            <AppSelect
+              label="Role"
               value={formRole}
-              onChange={(e) => setFormRole(e.target.value as RoleOption)}
-              className="border border-[#edeef0] rounded-lg px-2 py-1.5 text-sm"
+              onChange={(v) => setFormRole(v as RoleOption)}
+              options={[
+                { value: "Manager", label: "Manager" },
+                { value: "Admin", label: "Admin" },
+              ]}
               disabled={formLoading}
-            >
-              <option value="Manager">Manager</option>
-              <option value="Admin">Admin</option>
-            </select>
+              fullWidth
+              triggerClassName="rounded-xl px-4 py-2.5 text-sm font-semibold shadow-sm"
+            />
           </div>
-          <label className="flex items-center gap-2 text-sm text-gray-700">
+          <label className="flex items-center gap-2 text-sm text-gray-700 pb-2.5">
             <input
               type="checkbox"
               checked={formActive}
@@ -202,7 +203,7 @@ const TeamManager: React.FC = () => {
               });
             }}
             disabled={formLoading}
-            className="inline-flex items-center gap-1.5 px-4 py-1.5 rounded-lg text-[11px] font-bold so-btn-primary disabled:opacity-50"
+            className="inline-flex items-center justify-center gap-1.5 px-4 py-2.5 rounded-xl text-[11px] font-bold uppercase tracking-wide so-btn-primary shadow-sm transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
           >
             {formLoading && <Loader2 className="animate-spin" size={12} />}
             Save profile
@@ -251,23 +252,26 @@ const TeamManager: React.FC = () => {
                 <tr key={row.id} className="border-b border-[#edeef0] last:border-b-0 hover:bg-[#f7f6f3] transition-colors">
                   <td className="py-1.5 px-1.5 text-[11px] text-gray-900">{row.fullName}</td>
                   <td className="py-1.5 px-1.5 text-[11px] text-gray-700 break-words">{row.email}</td>
-                  <td className="py-1.5 px-1.5">
-                    <select
+                  <td className="py-1.5 px-1.5 min-w-0">
+                    <AppSelect
+                      id={`team-role-${row.id}`}
                       value={row.role}
-                      onChange={(e) =>
+                      onChange={(v) =>
                         handleUpsert({
                           fullName: row.fullName,
                           email: row.email,
-                          role: e.target.value as RoleOption,
+                          role: v as RoleOption,
                           active: row.active,
                         })
                       }
-                      className="border border-[#edeef0] rounded-lg px-2 py-1 text-[11px]"
+                      options={[
+                        { value: "Manager", label: "Manager" },
+                        { value: "Admin", label: "Admin" },
+                      ]}
                       disabled={formLoading}
-                    >
-                      <option value="Manager">Manager</option>
-                      <option value="Admin">Admin</option>
-                    </select>
+                      size="sm"
+                      triggerClassName="text-[11px] min-h-0 py-1"
+                    />
                   </td>
                   <td className="py-1.5 px-1.5">
                     <label className="inline-flex items-center gap-1 text-[11px] text-gray-700">

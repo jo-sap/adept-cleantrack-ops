@@ -17,6 +17,7 @@ import { getPublicHolidaysInRange } from "../lib/publicHolidays";
 import { generateAdHocOccurrencesForRange } from "../lib/adhocSchedule";
 import { exportAdHocJobsToSpreadsheet } from "../services/exportService";
 import { AU_STATES } from "../lib/auStates";
+import { AppSelect } from "./ui";
 
 const STATUS_OPTIONS = ["Requested", "Approved", "Scheduled", "Completed", "Cancelled", "In Progress"];
 // Reuse the existing "Job Type" column as schedule semantics (minimal schema approach).
@@ -191,47 +192,43 @@ export default function AdHocJobsManager() {
               className="w-full border border-[#edeef0] rounded-lg px-3 py-2 text-sm"
             />
           </label>
-          <label className="flex flex-col gap-1.5">
-            <span className="text-[11px] font-bold text-gray-500 uppercase">Status</span>
-            <select
-              value={filterStatus}
-              onChange={(e) => setFilterStatus(e.target.value)}
-              className="w-full border border-[#edeef0] rounded-lg px-3 py-2 text-sm"
-            >
-              <option value="">All</option>
-              {STATUS_OPTIONS.map((s) => (
-                <option key={s} value={s}>{s}</option>
-              ))}
-            </select>
-          </label>
+          <AppSelect
+            label="Status"
+            value={filterStatus}
+            onChange={setFilterStatus}
+            options={[
+              { value: "", label: "All" },
+              ...STATUS_OPTIONS.map((s) => ({ value: s, label: s })),
+            ]}
+          />
           {isAdmin && (
             <>
-              <label className="flex flex-col gap-1.5">
-                <span className="text-[11px] font-bold text-gray-500 uppercase">Manager</span>
-                <select
-                  value={filterManagerId}
-                  onChange={(e) => setFilterManagerId(e.target.value)}
-                  className="w-full border border-[#edeef0] rounded-lg px-3 py-2 text-sm"
-                >
-                  <option value="">All</option>
-                  {managers.map((m) => (
-                    <option key={m.id} value={m.id}>{m.fullName || m.email}</option>
-                  ))}
-                </select>
-              </label>
-              <label className="flex flex-col gap-1.5 sm:col-span-2 xl:col-span-1">
-                <span className="text-[11px] font-bold text-gray-500 uppercase">Site</span>
-                <select
+              <AppSelect
+                label="Manager"
+                value={filterManagerId}
+                onChange={setFilterManagerId}
+                options={[
+                  { value: "", label: "All" },
+                  ...managers.map((m) => ({
+                    value: m.id,
+                    label: m.fullName || m.email,
+                  })),
+                ]}
+              />
+              <div className="sm:col-span-2 xl:col-span-1 min-w-0">
+                <AppSelect
+                  label="Site"
                   value={filterSiteId}
-                  onChange={(e) => setFilterSiteId(e.target.value)}
-                  className="w-full border border-[#edeef0] rounded-lg px-3 py-2 text-sm"
-                >
-                  <option value="">All</option>
-                  {sites.map((s) => (
-                    <option key={s.id} value={s.id}>{s.siteName || s.address || s.id}</option>
-                  ))}
-                </select>
-              </label>
+                  onChange={setFilterSiteId}
+                  options={[
+                    { value: "", label: "All" },
+                    ...sites.map((s) => ({
+                      value: s.id,
+                      label: s.siteName || s.address || s.id,
+                    })),
+                  ]}
+                />
+              </div>
             </>
           )}
         </div>
@@ -951,19 +948,13 @@ function AdHocJobFormModal({
             />
           ))}
           {field("Schedule Type", "jobType", (
-            <select
+            <AppSelect
               id="jobType"
               value={form.jobType ?? ""}
-              onChange={(e) => setForm((f) => ({ ...f, jobType: e.target.value || "" }))}
-              className="w-full border border-[#edeef0] rounded-lg px-3 py-2 text-sm bg-white"
-            >
-              <option value="">Select schedule…</option>
-              {SCHEDULE_TYPE_OPTIONS.map((opt) => (
-                <option key={opt} value={opt}>
-                  {opt}
-                </option>
-              ))}
-            </select>
+              onChange={(v) => setForm((f) => ({ ...f, jobType: v }))}
+              options={SCHEDULE_TYPE_OPTIONS.map((opt) => ({ value: opt, label: opt }))}
+              placeholder="Select schedule…"
+            />
           ))}
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             {field("Company Name", "companyName", (
@@ -1077,19 +1068,16 @@ function AdHocJobFormModal({
                       />
                     ))}
                     {field("State", "manualSiteState", (
-                      <select
+                      <AppSelect
                         id="manualSiteState"
                         value={form.manualSiteState ?? ""}
-                        onChange={(e) => setForm((f) => ({ ...f, manualSiteState: e.target.value }))}
-                        className="w-full border border-[#edeef0] rounded-lg px-3 py-2 text-sm bg-white"
-                      >
-                        <option value="">Select state…</option>
-                        {AU_STATES.map((s) => (
-                          <option key={s} value={s}>
-                            {s}
-                          </option>
-                        ))}
-                      </select>
+                        onChange={(v) => setForm((f) => ({ ...f, manualSiteState: v }))}
+                        options={[
+                          { value: "", label: "Select state…" },
+                          ...AU_STATES.map((s) => ({ value: s, label: s })),
+                        ]}
+                        placeholder="Select state…"
+                      />
                     ))}
                   </div>
                   {field("Manual site address", "manualSiteAddress", (
@@ -1150,21 +1138,18 @@ function AdHocJobFormModal({
             ))}
             {field("Assigned Manager", "manager", (
               isAdmin ? (
-                <select
+                <AppSelect
                   id="manager"
                   value={form.assignedManagerId ?? ""}
-                  onChange={(e) =>
-                    setForm((f) => ({ ...f, assignedManagerId: e.target.value || null }))
-                  }
-                  className="w-full border border-[#edeef0] rounded-lg px-3 py-2 text-sm"
-                >
-                  <option value="">— None —</option>
-                  {managers.map((m) => (
-                    <option key={m.id} value={m.id}>
-                      {m.fullName || m.email}
-                    </option>
-                  ))}
-                </select>
+                  onChange={(v) => setForm((f) => ({ ...f, assignedManagerId: v || null }))}
+                  options={[
+                    { value: "", label: "— None —" },
+                    ...managers.map((m) => ({
+                      value: m.id,
+                      label: m.fullName || m.email,
+                    })),
+                  ]}
+                />
               ) : (
                 <input
                   id="manager"
@@ -1179,11 +1164,12 @@ function AdHocJobFormModal({
               )
             ))}
             {field("Status", "status", (
-              <select id="status" value={form.status ?? "Requested"} onChange={(e) => setForm((f) => ({ ...f, status: e.target.value }))} className="w-full border border-[#edeef0] rounded-lg px-3 py-2 text-sm">
-                {STATUS_OPTIONS.map((s) => (
-                  <option key={s} value={s}>{s}</option>
-                ))}
-              </select>
+              <AppSelect
+                id="status"
+                value={form.status ?? "Requested"}
+                onChange={(v) => setForm((f) => ({ ...f, status: v }))}
+                options={STATUS_OPTIONS.map((s) => ({ value: s, label: s }))}
+              />
             ))}
           </div>
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
@@ -1280,17 +1266,21 @@ function AdHocJobFormModal({
               </p>
               <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
                 {field("Frequency", "recFreq", (
-                  <select
+                  <AppSelect
                     id="recFreq"
                     value={form.recurrenceFrequency ?? ""}
-                    onChange={(e) => setForm((f) => ({ ...f, recurrenceFrequency: (e.target.value as any) || null }))}
-                    className="w-full border border-[#edeef0] rounded-lg px-3 py-2 text-sm bg-white"
-                  >
-                    <option value="">Select…</option>
-                    {RECURRENCE_FREQUENCY_OPTIONS.map((opt) => (
-                      <option key={opt} value={opt}>{opt}</option>
-                    ))}
-                  </select>
+                    onChange={(v) =>
+                      setForm((f) => ({
+                        ...f,
+                        recurrenceFrequency: (v as (typeof RECURRENCE_FREQUENCY_OPTIONS)[number]) || null,
+                      }))
+                    }
+                    options={[
+                      { value: "", label: "Select…" },
+                      ...RECURRENCE_FREQUENCY_OPTIONS.map((opt) => ({ value: opt, label: opt })),
+                    ]}
+                    placeholder="Select…"
+                  />
                 ))}
               </div>
 
@@ -1334,17 +1324,21 @@ function AdHocJobFormModal({
                 <div className="space-y-3">
                   <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                     {field("Monthly Mode", "monthlyMode", (
-                      <select
+                      <AppSelect
                         id="monthlyMode"
                         value={form.monthlyMode ?? ""}
-                        onChange={(e) => setForm((f) => ({ ...f, monthlyMode: (e.target.value as any) || null }))}
-                        className="w-full border border-[#edeef0] rounded-lg px-3 py-2 text-sm bg-white"
-                      >
-                        <option value="">Select…</option>
-                        {MONTHLY_MODE_OPTIONS.map((opt) => (
-                          <option key={opt.id} value={opt.id}>{opt.label}</option>
-                        ))}
-                      </select>
+                        onChange={(v) =>
+                          setForm((f) => ({
+                            ...f,
+                            monthlyMode: (v as (typeof MONTHLY_MODE_OPTIONS)[number]["id"]) || null,
+                          }))
+                        }
+                        options={[
+                          { value: "", label: "Select…" },
+                          ...MONTHLY_MODE_OPTIONS.map((opt) => ({ value: opt.id, label: opt.label })),
+                        ]}
+                        placeholder="Select…"
+                      />
                     ))}
                     {form.monthlyMode === "day_of_month" ? (
                       field("Day of Month (1–31)", "monthlyDom", (
@@ -1361,17 +1355,21 @@ function AdHocJobFormModal({
                       ))
                     ) : form.monthlyMode === "nth_weekday" ? (
                       field("Week of Month", "monthlyWom", (
-                        <select
+                        <AppSelect
                           id="monthlyWom"
                           value={form.monthlyWeekOfMonth ?? ""}
-                          onChange={(e) => setForm((f) => ({ ...f, monthlyWeekOfMonth: (e.target.value as any) || null }))}
-                          className="w-full border border-[#edeef0] rounded-lg px-3 py-2 text-sm bg-white"
-                        >
-                          <option value="">Select…</option>
-                          {WEEK_OF_MONTH_OPTIONS.map((opt) => (
-                            <option key={opt} value={opt}>{opt}</option>
-                          ))}
-                        </select>
+                          onChange={(v) =>
+                            setForm((f) => ({
+                              ...f,
+                              monthlyWeekOfMonth: (v as (typeof WEEK_OF_MONTH_OPTIONS)[number]) || null,
+                            }))
+                          }
+                          options={[
+                            { value: "", label: "Select…" },
+                            ...WEEK_OF_MONTH_OPTIONS.map((opt) => ({ value: opt, label: opt })),
+                          ]}
+                          placeholder="Select…"
+                        />
                       ))
                     ) : (
                       <div />
@@ -1381,17 +1379,24 @@ function AdHocJobFormModal({
                   {form.monthlyMode === "nth_weekday" && (
                     <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                       {field("Weekday", "monthlyWd", (
-                        <select
+                        <AppSelect
                           id="monthlyWd"
-                          value={form.monthlyWeekday ?? ""}
-                          onChange={(e) => setForm((f) => ({ ...f, monthlyWeekday: e.target.value === "" ? null : parseInt(e.target.value, 10) }))}
-                          className="w-full border border-[#edeef0] rounded-lg px-3 py-2 text-sm bg-white"
-                        >
-                          <option value="">Select…</option>
-                          {WEEKDAY_OPTIONS.map((d) => (
-                            <option key={d.id} value={d.id}>{d.label}</option>
-                          ))}
-                        </select>
+                          value={form.monthlyWeekday != null ? String(form.monthlyWeekday) : ""}
+                          onChange={(v) =>
+                            setForm((f) => ({
+                              ...f,
+                              monthlyWeekday: v === "" ? null : parseInt(v, 10),
+                            }))
+                          }
+                          options={[
+                            { value: "", label: "Select…" },
+                            ...WEEKDAY_OPTIONS.map((d) => ({
+                              value: String(d.id),
+                              label: d.label,
+                            })),
+                          ]}
+                          placeholder="Select…"
+                        />
                       ))}
                     </div>
                   )}

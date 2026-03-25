@@ -17,6 +17,7 @@ import {
   type SiteCleanerAssignment,
 } from "../repositories/assignedCleanersRepo";
 import { getSites, type Site } from "../repositories/sitesRepo";
+import { AppSelect } from "./ui";
 
 const WRITE_PERMISSION_HINT =
   "Admin consent may be required for Sites.ReadWrite.All or Lists.ReadWrite.All.";
@@ -1043,25 +1044,22 @@ const CleanerManager: React.FC<CleanerManagerProps> = ({ onCleanersRefresh }) =>
                 />
               </div>
 
-              <div className="space-y-1">
-                <label className="text-[10px] font-bold text-gray-400 uppercase tracking-widest">
-                  Worker Type <span className="text-red-500">*</span>
-                </label>
-                <select
-                  required
-                  value={formData.type ?? "cleaner"}
-                  onChange={(e) =>
-                    setFormData({
-                      ...formData,
-                      type: (e.target.value === "contractor" ? "contractor" : "cleaner"),
-                    })
-                  }
-                  className="w-full px-3 py-2 border border-[#edeef0] rounded-md text-sm outline-none focus:ring-1 focus:ring-gray-900"
-                >
-                  <option value="cleaner">Cleaner</option>
-                  <option value="contractor">Contractor</option>
-                </select>
-              </div>
+              <AppSelect
+                label="Worker Type"
+                required
+                name="workerType"
+                value={formData.type ?? "cleaner"}
+                onChange={(v) =>
+                  setFormData({
+                    ...formData,
+                    type: v === "contractor" ? "contractor" : "cleaner",
+                  })
+                }
+                options={[
+                  { value: "cleaner", label: "Cleaner" },
+                  { value: "contractor", label: "Contractor" },
+                ]}
+              />
 
               {!workerFormIsContractor && (
                 <>

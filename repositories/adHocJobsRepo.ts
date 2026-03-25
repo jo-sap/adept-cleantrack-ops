@@ -165,6 +165,14 @@ function isoDateInMonth(iso: string | null | undefined, year: number, month: num
   return y === year && m === month;
 }
 
+function isoYearMonth(iso: string | null | undefined): { year: number; month: number } | null {
+  if (!iso) return null;
+  const part = String(iso).trim().slice(0, 10);
+  const [y, m] = part.split("-").map(Number);
+  if (!Number.isFinite(y) || !Number.isFinite(m)) return null;
+  return { year: y, month: m };
+}
+
 function parseMonthFilter(value: string): { year: number; month: number } | null {
   const raw = String(value ?? "").trim();
   if (!raw) return null;
@@ -205,12 +213,46 @@ function parseMonthFilter(value: string): { year: number; month: number } | null
  * Request-only matching hid once-off work scheduled in March when Requested Date was another month.
  */
 function adHocJobTouchesMonth(job: AdHocJob, year: number, month: number): boolean {
-  return (
-    isoDateInMonth(job.requestedDate, year, month) ||
-    isoDateInMonth(job.scheduledDate, year, month) ||
-    isoDateInMonth(job.completedDate, year, month) ||
-    isoDateInMonth(job.recurrenceEndDate, year, month)
-  );
+  const isRecurring = !!job.recurrenceFrequency;
+
+  // Once-off jobs: month "touch" should be driven by scheduled/completed (not requested),
+  // otherwise a requested date in another month can cause items to appear incorrectly.
+  if (!isRecurring) {
+    return isoDateInMonth(job.scheduledDate, year, month) || isoDateInMonth(job.completedDate, year, month);
+  }
+
+  // Recurring jobs: requestedDate should NOT affect which months it appears in.
+  // We treat `scheduledDate` as the recurrence anchor (start) and stop at:
+  // - recurrence end date, or
+  // - completedDate (when set),
+  // whichever comes first (based on stored YYYY-MM-DD).
+  if (!job.scheduledDate) return false;
+
+  const startYM = isoYearMonth(job.scheduledDate);
+  if (!startYM) return false;
+
+  // Include month if it is not before the recurrence start month.
+  const startsBeforeOrInMonth = startYM.year < year || (startYM.year === year && startYM.month <= month);
+  if (!startsBeforeOrInMonth) return false;
+
+  const explicitEndIso = job.recurrenceEndDate ?? null;
+  const completedEndIso = job.completedDate ?? null;
+
+  const recurrenceEndIso =
+    explicitEndIso && completedEndIso
+      ? explicitEndIso <= completedEndIso
+        ? explicitEndIso
+        : completedEndIso
+      : explicitEndIso ?? completedEndIso;
+
+  // No end => active indefinitely.
+  if (!recurrenceEndIso) return true;
+
+  const endYM = isoYearMonth(recurrenceEndIso);
+  if (!endYM) return true; // don't accidentally hide due to parsing
+
+  // Include month if target month is not after the recurrence end month.
+  return endYM.year > year || (endYM.year === year && endYM.month >= month);
 }
 
 function getStr(f: Record<string, unknown>, ...keys: string[]): string {

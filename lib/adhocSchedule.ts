@@ -165,8 +165,7 @@ export function generateAdHocOccurrencesForRange(
   // Respect End Date if present; additionally, if status is Completed, do not generate future occurrences
   // after the completed date (but keep historical occurrences when viewing past periods).
   const explicitEnd = job.recurrenceEndDate ? startOfDay(new Date(job.recurrenceEndDate)) : null;
-  const completedEnd =
-    status === "completed" && job.completedDate ? startOfDay(new Date(job.completedDate)) : null;
+  const completedEnd = job.completedDate ? startOfDay(new Date(job.completedDate)) : null;
   const recurrenceEnd =
     explicitEnd && completedEnd
       ? (explicitEnd < completedEnd ? explicitEnd : completedEnd)

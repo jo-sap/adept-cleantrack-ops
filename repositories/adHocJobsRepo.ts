@@ -165,6 +165,41 @@ function isoDateInMonth(iso: string | null | undefined, year: number, month: num
   return y === year && m === month;
 }
 
+function parseMonthFilter(value: string): { year: number; month: number } | null {
+  const raw = String(value ?? "").trim();
+  if (!raw) return null;
+
+  // Preferred: native <input type="month"> value, e.g. "2026-03".
+  const isoLike = raw.match(/^(\d{4})-(\d{1,2})$/);
+  if (isoLike) {
+    const year = Number(isoLike[1]);
+    const month = Number(isoLike[2]);
+    if (Number.isFinite(year) && Number.isFinite(month) && month >= 1 && month <= 12) {
+      return { year, month };
+    }
+  }
+
+  // Accept manual text fallback, e.g. "03/2026" or "March 2026".
+  const slash = raw.match(/^(\d{1,2})\/(\d{4})$/);
+  if (slash) {
+    const month = Number(slash[1]);
+    const year = Number(slash[2]);
+    if (Number.isFinite(year) && Number.isFinite(month) && month >= 1 && month <= 12) {
+      return { year, month };
+    }
+  }
+
+  const parsed = new Date(raw);
+  if (!Number.isNaN(parsed.getTime())) {
+    return {
+      year: parsed.getFullYear(),
+      month: parsed.getMonth() + 1,
+    };
+  }
+
+  return null;
+}
+
 /**
  * Month filter: include jobs that touch this month on any primary date (not request-only).
  * Request-only matching hid once-off work scheduled in March when Requested Date was another month.
@@ -516,9 +551,15 @@ export async function getAdHocJobs(
   }
 
   if (filters?.month) {
-    const [y, m] = filters.month.split("-").map(Number);
-    list = list.filter((j) => adHocJobTouchesMonth(j, y, m));
-    if (DEBUG_ADHOC) console.log("[CleanTrack Ad Hoc Jobs] after month filter:", filters.month, "count:", list.length);
+    const parsed = parseMonthFilter(filters.month);
+    if (parsed) {
+      list = list.filter((j) => adHocJobTouchesMonth(j, parsed.year, parsed.month));
+      if (DEBUG_ADHOC) {
+        console.log("[CleanTrack Ad Hoc Jobs] after month filter:", filters.month, "=>", `${parsed.year}-${String(parsed.month).padStart(2, "0")}`, "count:", list.length);
+      }
+    } else if (DEBUG_ADHOC) {
+      console.warn("[CleanTrack Ad Hoc Jobs] skipped invalid month filter:", filters.month);
+    }
   }
   if (filters?.status) {
     list = list.filter((j) => j.status.toLowerCase() === filters!.status!.toLowerCase());

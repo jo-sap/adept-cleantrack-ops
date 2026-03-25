@@ -847,7 +847,50 @@ function AdHocJobFormModal({
     if (!token) return;
     setSubmitLoading(true);
     try {
-      let payload: AdHocJobPayload = form;
+      // Build a save payload that only includes fields relevant to the selected schedule.
+      // This prevents hidden/irrelevant fields (left as `null` in state) from clearing
+      // SharePoint columns during PATCH updates.
+      let payload: AdHocJobPayload = { ...form };
+
+      const schedule = scheduleType;
+      if (schedule === "Once Off") {
+        // Recurrence/monthly fields are irrelevant for once-off jobs.
+        delete (payload as any).recurrenceFrequency;
+        delete (payload as any).recurrenceEndDate;
+        delete (payload as any).hoursPerServiceDay;
+        delete (payload as any).recurrenceWeekdays;
+        delete (payload as any).weekdayHours;
+        delete (payload as any).monthlyMode;
+        delete (payload as any).monthlyDayOfMonth;
+        delete (payload as any).monthlyWeekOfMonth;
+        delete (payload as any).monthlyWeekday;
+        delete (payload as any).monthlyHours;
+      } else {
+        // Recurring jobs: once-off budget fields are irrelevant.
+        delete (payload as any).budgetedHours;
+
+        if (payload.recurrenceFrequency === "Monthly") {
+          // Monthly: weekday-hours are irrelevant.
+          delete (payload as any).recurrenceWeekdays;
+          delete (payload as any).weekdayHours;
+
+          // Only keep the fields for the selected monthly mode.
+          if (payload.monthlyMode === "day_of_month") {
+            delete (payload as any).monthlyWeekOfMonth;
+            delete (payload as any).monthlyWeekday;
+          } else if (payload.monthlyMode === "nth_weekday") {
+            delete (payload as any).monthlyDayOfMonth;
+          }
+        } else {
+          // Weekly/Fortnightly: monthly fields are irrelevant.
+          delete (payload as any).monthlyMode;
+          delete (payload as any).monthlyDayOfMonth;
+          delete (payload as any).monthlyWeekOfMonth;
+          delete (payload as any).monthlyWeekday;
+          delete (payload as any).monthlyHours;
+        }
+      }
+
       if (scheduleType === "Recurring") {
         const totals = computeRecurringTotals(form);
         if (totals) {

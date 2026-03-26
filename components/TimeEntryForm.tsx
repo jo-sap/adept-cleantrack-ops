@@ -45,6 +45,12 @@ function extractAustralianStateCode(value: string | null | undefined): string {
   if (!raw) return "";
 
   const upper = raw.toUpperCase();
+  const lettersOnly = upper.replace(/[^A-Z]/g, "");
+
+  // Match dotted/spacey abbreviations like "N.S.W." or "N S W".
+  for (const state of AU_STATES) {
+    if (lettersOnly === state) return state;
+  }
 
   // 1) Fast path: match the abbreviation anywhere in the string.
   for (const state of AU_STATES) {

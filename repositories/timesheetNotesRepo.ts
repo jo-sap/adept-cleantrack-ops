@@ -325,6 +325,9 @@ export type SiteNotesExportLookup = {
   bySiteId: Record<string, string>;
   bySiteNameLower: Record<string, string>;
   byAdhocTag: Record<string, string>;
+  byCleanerSiteId: Record<string, string>;
+  byCleanerSiteNameLower: Record<string, string>;
+  byCleanerAdhocTag: Record<string, string>;
 };
 
 /** For XLSX export: map by normalized site id and by lookup display name (ids can differ from app sites). */
@@ -336,27 +339,50 @@ export function buildSiteNotesExportLookup(
   const bySiteId: Record<string, string> = {};
   const bySiteNameLower: Record<string, string> = {};
   const byAdhocTag: Record<string, string> = {};
+  const byCleanerSiteId: Record<string, string> = {};
+  const byCleanerSiteNameLower: Record<string, string> = {};
+  const byCleanerAdhocTag: Record<string, string> = {};
 
   for (const n of notes) {
-    if (n.cleanerId != null && String(n.cleanerId).trim() !== "") continue;
     if (comparablePeriodYmd(n.periodStartYmd) !== p) continue;
     const body = n.noteBody?.trim();
     if (!body) continue;
+    const normalizedTags = (n.tags ?? []).map((t) => String(t ?? "").trim().toLowerCase());
+    const hasAdhocTag = normalizedTags.some((t) => t.startsWith("adhocjob:"));
+    const cleanerIdNorm = sharepoint.normalizeListItemId(n.cleanerId);
+    const cleanerPrefix = cleanerIdNorm ? `${cleanerIdNorm}|` : "";
     const sid = sharepoint.normalizeListItemId(n.siteId);
-    if (sid) {
-      bySiteId[sid] = body;
+    // Keep ad hoc notes isolated from generic site maps so contract export rows
+    // don't accidentally pick up ad hoc-specific comments.
+    if (!hasAdhocTag && !cleanerIdNorm) {
+      if (sid) {
+        bySiteId[sid] = body;
+      }
+      const nm = normalizeSiteLabelForNotes(n.siteLookupName);
+      if (nm) {
+        bySiteNameLower[nm] = body;
+      }
     }
-    const nm = normalizeSiteLabelForNotes(n.siteLookupName);
-    if (nm) {
-      bySiteNameLower[nm] = body;
+    if (!hasAdhocTag && cleanerIdNorm) {
+      if (sid) byCleanerSiteId[`${cleanerPrefix}${sid}`] = body;
+      const nm = normalizeSiteLabelForNotes(n.siteLookupName);
+      if (nm) byCleanerSiteNameLower[`${cleanerPrefix}${nm}`] = body;
     }
-    for (const rawTag of n.tags ?? []) {
+    for (const rawTag of normalizedTags) {
       const tag = String(rawTag ?? "").trim().toLowerCase();
       if (!tag.startsWith("adhocjob:")) continue;
-      byAdhocTag[tag] = body;
+      if (cleanerIdNorm) byCleanerAdhocTag[`${cleanerPrefix}${tag}`] = body;
+      else byAdhocTag[tag] = body;
     }
   }
-  return { bySiteId, bySiteNameLower, byAdhocTag };
+  return {
+    bySiteId,
+    bySiteNameLower,
+    byAdhocTag,
+    byCleanerSiteId,
+    byCleanerSiteNameLower,
+    byCleanerAdhocTag,
+  };
 }
 
 export async function listAllTimesheetPeriodNotes(

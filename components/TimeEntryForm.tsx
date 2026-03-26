@@ -14,6 +14,7 @@ import { exportFortnightTimesheets } from '../services/exportService';
 import { getGraphAccessToken } from '../lib/graph';
 import { getAdHocJobs } from '../repositories/adHocJobsRepo';
 import { resolveAdHocJobNameTemplate } from '../lib/adhocPlaceholders';
+import { AU_STATES } from '../lib/auStates';
 import {
   listAllTimesheetPeriodNotes,
   upsertTimesheetPeriodNote,
@@ -38,6 +39,36 @@ interface TimeEntryFormProps {
 }
 
 type QueueKey = 'all' | 'needs-hours' | 'incomplete' | 'over-budget' | 'completed' | 'adhoc';
+
+function extractAustralianStateCode(value: string | null | undefined): string {
+  const raw = String(value ?? "").trim();
+  if (!raw) return "";
+
+  const upper = raw.toUpperCase();
+
+  // 1) Fast path: match the abbreviation anywhere in the string.
+  for (const state of AU_STATES) {
+    const re = new RegExp(`\\b${state}\\b`, "i");
+    if (re.test(upper)) return state;
+  }
+
+  // 2) Full names (depends on how SharePoint is configured / what SiteManager writes).
+  const normalized = upper
+    .replace(/[^A-Z]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+
+  if (normalized.includes("NEW SOUTH WALES")) return "NSW";
+  if (normalized.includes("VICTORIA")) return "VIC";
+  if (normalized.includes("QUEENSLAND")) return "QLD";
+  if (normalized.includes("SOUTH AUSTRALIA")) return "SA";
+  if (normalized.includes("WESTERN AUSTRALIA")) return "WA";
+  if (normalized.includes("TASMANIA")) return "TAS";
+  if (normalized.includes("NORTHERN TERRITORY")) return "NT";
+  if (normalized.includes("AUSTRALIAN CAPITAL TERRITORY")) return "ACT";
+
+  return "";
+}
 
 function normalizeScheduleType(raw: string | undefined | null): 'once_off' | 'recurring' {
   const s = String(raw ?? '').trim().toLowerCase();
@@ -82,6 +113,7 @@ const TimeEntryForm: React.FC<TimeEntryFormProps> = ({
   const [isSaved, setIsSaved] = useState(false);
   const [hasUnsavedChanges, setHasUnsavedChanges] = useState(false);
   const [siteSearchQuery, setSiteSearchQuery] = useState('');
+  const [stateFilter, setStateFilter] = useState<string>('ALL');
   const [saveLoading, setSaveLoading] = useState(false);
   const [adhocJobId, setAdhocJobId] = useState<string | null>(null);
   const [activeAdHocCardJobId, setActiveAdHocCardJobId] = useState<string | null>(null);
@@ -141,15 +173,28 @@ const TimeEntryForm: React.FC<TimeEntryFormProps> = ({
   );
   const canSaveAnything = !periodLocked && (hasUnsavedChanges || managerNoteDirty);
 
+  const siteStateById = useMemo(() => {
+    const map: Record<string, string> = {};
+    sites.forEach((s) => {
+      map[s.id] = extractAustralianStateCode(s.state ?? s.address);
+    });
+    return map;
+  }, [sites]);
+
   const filteredSites = useMemo(() => {
     const q = siteSearchQuery.trim().toLowerCase();
-    if (!q) return sites;
-    return sites.filter(
-      s =>
+    return sites.filter((s) => {
+      if (stateFilter !== 'ALL') {
+        const siteState = siteStateById[s.id] || "";
+        if (siteState !== stateFilter) return false;
+      }
+      if (!q) return true;
+      return (
         (s.name?.toLowerCase().includes(q) ?? false) ||
         (s.address?.toLowerCase().includes(q) ?? false)
-    );
-  }, [sites, siteSearchQuery]);
+      );
+    });
+  }, [sites, siteSearchQuery, stateFilter, siteStateById]);
 
   const dates = useMemo(() => {
     const list = [];
@@ -431,6 +476,20 @@ const TimeEntryForm: React.FC<TimeEntryFormProps> = ({
     return map;
   }, [fortnightAdHocJobs, currentPeriod.startDate, currentPeriod.endDate, phInPeriod, entries]);
 
+  const filteredFortnightAdHocJobs = useMemo(() => {
+    if (stateFilter === 'ALL') return fortnightAdHocJobs;
+    return fortnightAdHocJobs.filter((job) => {
+      const manualState = extractAustralianStateCode(job.manualSiteState);
+      if (manualState) return manualState === stateFilter;
+      if (job.siteId) {
+        const linkedState = siteStateById[String(job.siteId)] || "";
+        if (linkedState) return linkedState === stateFilter;
+      }
+      const fallbackFromAddress = extractAustralianStateCode(job.manualSiteAddress);
+      return fallbackFromAddress === stateFilter;
+    });
+  }, [fortnightAdHocJobs, stateFilter, siteStateById]);
+
   const queueCounts = useMemo(() => {
     let needs = 0;
     let incomplete = 0;
@@ -457,14 +516,14 @@ const TimeEntryForm: React.FC<TimeEntryFormProps> = ({
       incomplete,
       over,
       completed,
-      adhoc: fortnightAdHocJobs.length,
+      adhoc: filteredFortnightAdHocJobs.length,
     };
-  }, [filteredSites, siteSummaryById, fortnightAdHocJobs.length]);
+  }, [filteredSites, siteSummaryById, filteredFortnightAdHocJobs.length]);
 
   const orderedSites = useMemo(() => {
     if (queueKey === 'adhoc') {
       const siteHasAdHoc = (siteId: string) =>
-        fortnightAdHocJobs.some(
+        filteredFortnightAdHocJobs.some(
           (j) => j.siteId && String(j.siteId).trim() === String(siteId).trim()
         );
       return [...filteredSites].sort((a, b) => {
@@ -491,7 +550,7 @@ const TimeEntryForm: React.FC<TimeEntryFormProps> = ({
       const bMatch = classify(b.id) === queueKey ? 0 : 1;
       return aMatch - bMatch;
     });
-  }, [filteredSites, queueKey, siteSummaryById, fortnightAdHocJobs]);
+  }, [filteredSites, queueKey, siteSummaryById, filteredFortnightAdHocJobs]);
 
   const siteEntriesByDate = useMemo(() => {
     if (!activeSiteId) return {} as Record<string, Record<string, number>>;
@@ -700,14 +759,24 @@ const TimeEntryForm: React.FC<TimeEntryFormProps> = ({
         const adhocNameNorm = normalizeSiteLabelForNotes(getDisplayAdHocJobName(activeAdHocJob));
         const picked = adhocTag
           ? notes.find((n) =>
-              !n.cleanerId &&
+              String(n.cleanerId ?? "").trim() === String(selectedCleanerId ?? "").trim() &&
               comparablePeriodYmd(n.periodStartYmd) === periodYmd &&
               (
                 (n.tags ?? []).some((t) => t.trim().toLowerCase() === adhocTag.toLowerCase()) ||
                 (!!adhocNameNorm && normalizeSiteLabelForNotes(n.siteLookupName) === adhocNameNorm)
               )
             )
-          : pickSiteNoteForPeriod(notes, activeSiteId, periodYmd, activeSite?.name);
+          : notes.find((n) => {
+              const p = comparablePeriodYmd(n.periodStartYmd) === periodYmd;
+              if (!p) return false;
+              const cleanerMatch =
+                String(n.cleanerId ?? "").trim() === String(selectedCleanerId ?? "").trim();
+              if (!cleanerMatch) return false;
+              const sid = String(n.siteId ?? "").trim();
+              if (sid && sid === String(activeSiteId ?? "").trim()) return true;
+              const displayNorm = normalizeSiteLabelForNotes(activeSite?.name);
+              return !!displayNorm && normalizeSiteLabelForNotes(n.siteLookupName) === displayNorm;
+            }) ?? pickSiteNoteForPeriod(notes, activeSiteId, periodYmd, activeSite?.name);
         const body = picked?.noteBody ?? "";
         setManagerNoteBody(body);
         setManagerNoteSavedBody(body);
@@ -732,6 +801,7 @@ const TimeEntryForm: React.FC<TimeEntryFormProps> = ({
     activeSite,
     currentPeriod.id,
     currentPeriod.startDate,
+    selectedCleanerId,
     adhocJobId,
     activeAdHocJob,
     getDisplayAdHocJobName,
@@ -859,7 +929,7 @@ const TimeEntryForm: React.FC<TimeEntryFormProps> = ({
             siteId: isVirtualAdHocContext ? "" : activeSiteId,
             siteName: getDisplayAdHocJobName(activeAdHocJob) || activeSite.name || "",
             periodStartYmd: periodYmd,
-            cleanerId: null,
+            cleanerId: selectedCleanerId || null,
             tags: adhocTag ? [adhocTag] : [],
             noteBody: managerNoteBody,
           });
@@ -1021,12 +1091,24 @@ const TimeEntryForm: React.FC<TimeEntryFormProps> = ({
         return acc;
       }, {});
 
+      let remainingBudgetTotal = 0;
+
       dates.forEach((date) => {
         const dateStr = format(date, "yyyy-MM-dd");
         const dayAssignments = entriesByDate[dateStr] || {};
+
+        // Total planned hours for the ad hoc job on this date, then allocate the remainder to the selected cleaner.
+        const plannedTotalForDate = activeAdHocPlannedByDate[dateStr] ?? 0;
+        const otherHours = Object.entries(dayAssignments)
+          .filter(([cid]) => cid !== selectedCleanerId)
+          .reduce((sum, [, h]) => sum + Number(h), 0);
+        const remainingPlanForCleaner = Math.max(plannedTotalForDate - otherHours, 0);
+        remainingBudgetTotal += remainingPlanForCleaner;
+
         const existingForCleaner = dayAssignments[selectedCleanerId] || 0;
         const draftForCleaner =
           draftHours[dateStr] !== undefined ? draftHours[dateStr] : existingForCleaner;
+
         cleanerActualTotal += draftForCleaner;
         if (draftForCleaner > 0) {
           const occurrenceTotals = occurrenceTotalsByDate[dateStr];
@@ -1040,10 +1122,10 @@ const TimeEntryForm: React.FC<TimeEntryFormProps> = ({
       });
 
       return {
-        budgetTotal,
-        budgetDisplay: budgetTotal,
+        budgetTotal: remainingBudgetTotal,
+        budgetDisplay: remainingBudgetTotal,
         actualTotal: cleanerActualTotal,
-        variance: cleanerActualTotal - budgetTotal,
+        variance: cleanerActualTotal - remainingBudgetTotal,
         estPay,
         adhocChargeTotal: activeAdHocTotals.charge,
         adhocCostTotal: activeAdHocTotals.cost,
@@ -1127,7 +1209,7 @@ const TimeEntryForm: React.FC<TimeEntryFormProps> = ({
       isPeriodBudget: usePeriodCap,
       periodCap,
     };
-  }, [activeSite, selectedCleanerId, dates, draftHours, siteEntriesByDate, adHocEntriesByDate, adhocJobId, activeAdHocJob, activeAdHocOccurrences, activeAdHocTotals, currentPeriod]);
+  }, [activeSite, selectedCleanerId, dates, draftHours, siteEntriesByDate, adHocEntriesByDate, adhocJobId, activeAdHocJob, activeAdHocPlannedByDate, activeAdHocOccurrences, activeAdHocTotals, currentPeriod]);
 
   if (activeSiteId && activeSite) {
     return (
@@ -1317,12 +1399,20 @@ const TimeEntryForm: React.FC<TimeEntryFormProps> = ({
                     onClick={() => {
                       const next: Record<string, number> = { ...draftHours };
                       let changed = false;
-                      for (const [dateStr, planned] of Object.entries(activeAdHocPlannedByDate)) {
-                        if ((next[dateStr] ?? 0) === 0 && planned > 0) {
-                          next[dateStr] = planned;
+                      // Allocate only the remaining scheduled hours for *this* cleaner.
+                      dates.forEach((d) => {
+                        const dateStr = format(d, "yyyy-MM-dd");
+                        const plannedTotalForDate = activeAdHocPlannedByDate[dateStr] ?? 0;
+                        const dayAssignments = adHocEntriesByDate[dateStr] || {};
+                        const otherHours = Object.entries(dayAssignments)
+                          .filter(([cid]) => cid !== selectedCleanerId)
+                          .reduce((sum, [, h]) => sum + Number(h), 0);
+                        const remainingPlanForCleaner = Math.max(plannedTotalForDate - otherHours, 0);
+                        if ((next[dateStr] ?? 0) === 0 && remainingPlanForCleaner > 0) {
+                          next[dateStr] = remainingPlanForCleaner;
                           changed = true;
                         }
-                      }
+                      });
                       if (changed) {
                         setDraftHours(next);
                         setHasUnsavedChanges(true);
@@ -1384,12 +1474,12 @@ const TimeEntryForm: React.FC<TimeEntryFormProps> = ({
                   ? undefined
                   : getNoServicePeriodForDate(date, activeSite.no_service_periods);
                 const dayAssignments = (isAdHoc ? adHocEntriesByDate : siteEntriesByDate)[dateStr] || {};
-                const sitePlan = isAdHoc ? 0 : getPlannedHoursForDate(activeSite, index, date);
+                const sitePlan = isAdHoc ? (activeAdHocPlannedByDate[dateStr] ?? 0) : getPlannedHoursForDate(activeSite, index, date);
                 const otherHours = Object.entries(dayAssignments)
                   .filter(([cid]) => cid !== selectedCleanerId)
                   .reduce((sum, [, h]) => sum + h, 0);
                 const remainingPlan = Math.max(sitePlan - otherHours, 0);
-                const planned = isAdHoc ? (activeAdHocPlannedByDate[dateStr] ?? 0) : remainingPlan;
+                const planned = remainingPlan;
                 const hours = draftHours[dateStr] || 0;
                 // Same plan vs actual styling as contract sites so scheduled ad hoc days show Missing / On target / etc.
                 const status =
@@ -1404,7 +1494,7 @@ const TimeEntryForm: React.FC<TimeEntryFormProps> = ({
                     : getDayStatus(planned, hours);
                 const existingForThisCleaner = dayAssignments[selectedCleanerId] || 0;
                 const fullyAllocatedToOthers =
-                  !isAdHoc && sitePlan > 0 && remainingPlan <= 0 && existingForThisCleaner === 0;
+                  sitePlan > 0 && remainingPlan <= 0 && existingForThisCleaner === 0;
                 const noServiceLabel = noServicePeriod?.label?.trim() || noServicePeriod?.reason?.trim() || "No Service";
                 return (
                   <div key={dateStr} onClick={() => inputRefs.current[dateStr]?.focus()} className={`flex flex-col p-2.5 sm:p-3 bg-white border rounded-xl cursor-pointer group relative overflow-hidden ${status.border} ${status.bg.replace('bg-', 'hover:bg-')}`}>
@@ -1557,24 +1647,38 @@ const TimeEntryForm: React.FC<TimeEntryFormProps> = ({
           );
         })}
       </div>
-      <div className="relative">
-        <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" size={18} />
-        <input
-          type="search"
-          placeholder="Search sites by name or address…"
-          value={siteSearchQuery}
-          onChange={(e) => setSiteSearchQuery(e.target.value)}
-          className="w-full pl-10 pr-4 py-2.5 so-input text-sm text-gray-900 placeholder-gray-400 bg-white"
-          aria-label="Search sites"
-        />
+      <div className="flex flex-col sm:flex-row sm:items-center gap-3">
+        <div className="relative flex-1">
+          <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" size={18} />
+          <input
+            type="search"
+            placeholder="Search sites by name or address…"
+            value={siteSearchQuery}
+            onChange={(e) => setSiteSearchQuery(e.target.value)}
+            className="w-full pl-10 pr-4 py-2.5 so-input text-sm text-gray-900 placeholder-gray-400 bg-white"
+            aria-label="Search sites"
+          />
+        </div>
+        <div className="w-full sm:w-[220px]">
+          <AppSelect
+            value={stateFilter}
+            onChange={setStateFilter}
+            options={[
+              { value: "ALL", label: "All states" },
+              ...AU_STATES.map((s) => ({ value: s, label: s })),
+            ]}
+            placeholder="State"
+            size="md"
+          />
+        </div>
       </div>
       <div className="space-y-3">
-        {queueKey === 'adhoc' && fortnightAdHocJobs.length > 0 && (
+        {queueKey === 'adhoc' && filteredFortnightAdHocJobs.length > 0 && (
           <div className="space-y-2 mb-1">
             <p className="text-[10px] font-bold text-gray-500 uppercase tracking-widest px-1">
               Ad hoc jobs this fortnight — select to enter timesheet hours
             </p>
-            {fortnightAdHocJobs.map((job) => {
+            {filteredFortnightAdHocJobs.map((job) => {
               const linkedSite = job.siteId ? sites.find((s) => String(s.id) === String(job.siteId)) : undefined;
               const targetSite = linkedSite;
               const siteLabel =
@@ -1659,9 +1763,9 @@ const TimeEntryForm: React.FC<TimeEntryFormProps> = ({
             })}
           </div>
         )}
-        {queueKey === 'adhoc' && fortnightAdHocJobs.length === 0 && (
+        {queueKey === 'adhoc' && filteredFortnightAdHocJobs.length === 0 && (
           <p className="text-sm text-amber-800/90 bg-amber-50 border border-amber-100 rounded-lg px-4 py-3">
-            No ad hoc jobs have planned work in this fortnight.
+            No ad hoc jobs match the current filters for this fortnight.
           </p>
         )}
         {orderedSites.map(site => {

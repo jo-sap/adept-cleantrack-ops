@@ -12,6 +12,8 @@ export interface Site {
   id: string;
   name: string;
   address: string;
+  /** Australian state/territory code (e.g. NSW). */
+  state?: string;
   is_active: boolean;
   budgeted_hours_per_fortnight: number;
   daily_budgets: number[];

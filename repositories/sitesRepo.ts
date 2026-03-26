@@ -337,6 +337,7 @@ export function toAppSite(
   id: string;
   name: string;
   address: string;
+  state?: string;
   is_active: boolean;
   monthly_revenue: number;
   budgeted_hours_per_fortnight: number;
@@ -399,6 +400,7 @@ export function toAppSite(
     id: s.id,
     name: s.siteName,
     address: s.address,
+    state: s.state || undefined,
     is_active: s.active,
     monthly_revenue: s.monthlyRevenue ?? 0,
     budgeted_hours_per_fortnight: fortnightHours,

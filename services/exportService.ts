@@ -8,28 +8,41 @@ import type { SiteNotesExportLookup } from '../repositories/timesheetNotesRepo';
 
 function managerNoteForExport(
   lookup: SiteNotesExportLookup | undefined,
+  cleanerId?: string,
   site?: Site,
   siteName?: string,
   adHocJobIds: string[] = [],
   adHocJobNames: string[] = []
 ): string {
   if (!lookup) return "";
+  const cleanerKey = sharepoint.normalizeListItemId(cleanerId);
+  const cleanerPrefix = cleanerKey ? `${cleanerKey}|` : "";
   const sid = site ? sharepoint.normalizeListItemId(site.id) : "";
   const byId = sid ? lookup.bySiteId[sid]?.trim() || "" : "";
+  const byCleanerId =
+    cleanerPrefix && sid ? lookup.byCleanerSiteId[`${cleanerPrefix}${sid}`]?.trim() || "" : "";
   const normalizedName = normalizeSiteLabelForNotes(siteName || site?.name || "");
   const byName = normalizedName ? lookup.bySiteNameLower[normalizedName]?.trim() || "" : "";
+  const byCleanerName =
+    cleanerPrefix && normalizedName
+      ? lookup.byCleanerSiteNameLower[`${cleanerPrefix}${normalizedName}`]?.trim() || ""
+      : "";
   let fuzzySiteNote = "";
-  if (!byId && !byName && normalizedName) {
+  if (!byId && !byName && !byCleanerId && !byCleanerName && normalizedName) {
     // Handle label drift like "Blackwoods" vs "Blackwoods Macquarie Park".
     const fuzzy = Object.entries(lookup.bySiteNameLower).find(([k]) =>
       k.includes(normalizedName) || normalizedName.includes(k)
     );
     fuzzySiteNote = fuzzy?.[1]?.trim() || "";
   }
-  const siteNote = byId || byName || fuzzySiteNote;
+  const siteNote = byCleanerId || byCleanerName || byId || byName || fuzzySiteNote;
   const adHocNotes = adHocJobIds
     .map((id) => {
       const tag = `adhocjob:${String(id).trim().toLowerCase()}`;
+      const cleanerTagged = cleanerPrefix
+        ? lookup.byCleanerAdhocTag[`${cleanerPrefix}${tag}`]?.trim() || ""
+        : "";
+      if (cleanerTagged) return cleanerTagged;
       return lookup.byAdhocTag[tag]?.trim() || "";
     })
     .filter((v, idx, arr) => !!v && arr.indexOf(v) === idx);
@@ -319,6 +332,7 @@ export const exportFortnightTimesheets = (
     row.push(
       managerNoteForExport(
         siteNotesLookup,
+        cleanerId,
         site,
         derivedSiteName,
         Array.from(adHocJobIdsForRow),

@@ -77,6 +77,7 @@ const TimeEntryForm: React.FC<TimeEntryFormProps> = ({
   );
   const [activeSiteId, setActiveSiteId] = useState<string | null>(null);
   const [selectedCleanerId, setSelectedCleanerId] = useState<string>('');
+  const [adhocCleanerNameInput, setAdhocCleanerNameInput] = useState<string>("");
   const [draftHours, setDraftHours] = useState<Record<string, number>>({});
   const [isSaved, setIsSaved] = useState(false);
   const [hasUnsavedChanges, setHasUnsavedChanges] = useState(false);
@@ -126,6 +127,11 @@ const TimeEntryForm: React.FC<TimeEntryFormProps> = ({
   }, [activeSiteId, fortnightAdHocJobs, adHocJobsForSite, cleaners, currentPeriod.startDate]);
   const activeSite = sites.find((s) => s.id === activeSiteId) ?? virtualAdHocSite ?? undefined;
   const activeCleaner = cleaners.find(c => c.id === selectedCleanerId);
+  const getCleanerDisplayName = useCallback(
+    (cleaner: Cleaner | undefined | null) =>
+      `${cleaner?.firstName ?? ""} ${cleaner?.lastName ?? ""}`.trim() || cleaner?.id || "",
+    []
+  );
 
   const managerNoteDirty = useMemo(
     () =>
@@ -518,6 +524,7 @@ const TimeEntryForm: React.FC<TimeEntryFormProps> = ({
   useEffect(() => {
     if (!activeSiteId || !activeSite) {
       setSelectedCleanerId('');
+      setAdhocCleanerNameInput("");
       return;
     }
     const adhocMode = !!activeAdHocCardJobId;
@@ -526,14 +533,61 @@ const TimeEntryForm: React.FC<TimeEntryFormProps> = ({
       : (activeSite.assigned_cleaner_ids ?? []);
     if (personnelIds.length === 0) {
       setSelectedCleanerId('');
+      setAdhocCleanerNameInput("");
       return;
     }
-    const firstId = personnelIds[0];
+    const periodStartYmd = format(currentPeriod.startDate, "yyyy-MM-dd");
+    const periodEndYmd = format(currentPeriod.endDate, "yyyy-MM-dd");
+    const activeAdhocJobId = activeAdHocCardJobId ?? adhocJobId;
+    const preferredAdhocCleanerId = activeAdhocJobId
+      ? entries
+          .filter((e) => {
+            if (!e.cleanerId) return false;
+            if (e.adhocJobId !== activeAdhocJobId) return false;
+            if (!isVirtualAdHocContext && e.siteId !== activeSiteId) return false;
+            return e.date >= periodStartYmd && e.date <= periodEndYmd;
+          })
+          .map((e) => e.cleanerId as string)
+          .sort((a, b) => {
+            const aName = getCleanerDisplayName(cleaners.find((c) => c.id === a)).toLowerCase();
+            const bName = getCleanerDisplayName(cleaners.find((c) => c.id === b)).toLowerCase();
+            return aName.localeCompare(bName);
+          })[0] ?? ""
+      : "";
     setSelectedCleanerId(prev => {
+      if (adhocMode) {
+        // Prefer saved Ad Hoc cleaner(s) for this job; if multiple, choose first alphabetically.
+        if (preferredAdhocCleanerId && personnelIds.includes(preferredAdhocCleanerId)) {
+          return preferredAdhocCleanerId;
+        }
+        if (prev && personnelIds.includes(prev)) return prev;
+        return '';
+      }
+      const firstId = personnelIds[0];
       if (prev && personnelIds.includes(prev)) return prev;
       return firstId;
     });
-  }, [activeSiteId, activeSite, activeAdHocCardJobId, cleaners]);
+  }, [
+    activeSiteId,
+    activeSite,
+    activeAdHocCardJobId,
+    adhocJobId,
+    cleaners,
+    currentPeriod.startDate,
+    currentPeriod.endDate,
+    entries,
+    isVirtualAdHocContext,
+    getCleanerDisplayName,
+  ]);
+
+  useEffect(() => {
+    if (!selectedCleanerId) {
+      setAdhocCleanerNameInput("");
+      return;
+    }
+    const selected = cleaners.find((c) => c.id === selectedCleanerId);
+    setAdhocCleanerNameInput(getCleanerDisplayName(selected));
+  }, [selectedCleanerId, cleaners, getCleanerDisplayName]);
 
   // For standard site timesheets, always stay on contract work.
   // Ad hoc context is only entered from the dedicated ad hoc job cards.
@@ -1127,18 +1181,66 @@ const TimeEntryForm: React.FC<TimeEntryFormProps> = ({
             .filter((c): c is Cleaner => !!c);
           const cleanerSelectOptions = options.map((c) => ({
             value: c.id,
-            label: `${c.firstName} ${c.lastName}`.trim() || c.id,
+            label: getCleanerDisplayName(c),
           }));
+          const cleanerTypeaheadOptions = options.map((c) => ({
+            id: c.id,
+            name: getCleanerDisplayName(c),
+            norm: getCleanerDisplayName(c).trim().toLowerCase(),
+          }));
+          const cleanerDatalistId = `adhoc-cleaner-list-${activeSiteId ?? "default"}`;
           return (
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 border-b border-[#edeef0] pt-2 pb-2">
               <div className="min-w-0 sm:max-w-xs">
-                <AppSelect
-                  label={adhocMode ? "Cleaner" : "Personnel"}
-                  value={selectedCleanerId}
-                  onChange={setSelectedCleanerId}
-                  options={cleanerSelectOptions}
-                  placeholder="Select cleaner…"
-                />
+                {adhocMode ? (
+                  <div>
+                    <label className="block text-[10px] font-bold uppercase tracking-widest text-gray-400 mb-1">
+                      Cleaner
+                    </label>
+                    <input
+                      type="text"
+                      value={adhocCleanerNameInput}
+                      onChange={(e) => {
+                        const next = e.target.value;
+                        setAdhocCleanerNameInput(next);
+                        const norm = next.trim().toLowerCase();
+                        const exact = cleanerTypeaheadOptions.find((x) => x.norm === norm);
+                        if (exact) setSelectedCleanerId(exact.id);
+                      }}
+                      onBlur={() => {
+                        const norm = adhocCleanerNameInput.trim().toLowerCase();
+                        if (!norm) return;
+                        const exact = cleanerTypeaheadOptions.find((x) => x.norm === norm);
+                        if (exact) {
+                          setSelectedCleanerId(exact.id);
+                          setAdhocCleanerNameInput(exact.name);
+                          return;
+                        }
+                        const matches = cleanerTypeaheadOptions.filter((x) => x.norm.includes(norm));
+                        if (matches.length === 1) {
+                          setSelectedCleanerId(matches[0].id);
+                          setAdhocCleanerNameInput(matches[0].name);
+                        }
+                      }}
+                      list={cleanerDatalistId}
+                      className="w-full border border-[#edeef0] rounded-lg px-3 py-2 text-sm"
+                      placeholder="Search cleaner..."
+                    />
+                    <datalist id={cleanerDatalistId}>
+                      {cleanerTypeaheadOptions.map((opt) => (
+                        <option key={opt.id} value={opt.name} />
+                      ))}
+                    </datalist>
+                  </div>
+                ) : (
+                  <AppSelect
+                    label="Personnel"
+                    value={selectedCleanerId}
+                    onChange={setSelectedCleanerId}
+                    options={cleanerSelectOptions}
+                    placeholder="Select cleaner…"
+                  />
+                )}
               </div>
               <div className="min-w-0 sm:max-w-xs">
                 <div className="mb-1 flex items-center justify-between gap-2">

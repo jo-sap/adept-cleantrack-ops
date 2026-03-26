@@ -546,6 +546,7 @@ function AdHocJobFormModal({
   const [pasteError, setPasteError] = useState<string | null>(null);
   const [existingAttachments, setExistingAttachments] = useState<AdHocAttachment[]>([]);
   const jobNameInputRef = useRef<HTMLInputElement | null>(null);
+  const descriptionInputRef = useRef<HTMLTextAreaElement | null>(null);
   const insertJobNamePlaceholder = useCallback((token: string) => {
     setForm((f) => {
       const cur = f.jobName ?? "";
@@ -568,6 +569,30 @@ function AdHocJobFormModal({
         return { ...f, jobName: next };
       }
       return { ...f, jobName: cur + token };
+    });
+  }, []);
+  const insertDescriptionPlaceholder = useCallback((token: string) => {
+    setForm((f) => {
+      const cur = f.description ?? "";
+      const el = descriptionInputRef.current;
+      if (el && typeof el.selectionStart === "number" && typeof el.selectionEnd === "number") {
+        const start = el.selectionStart;
+        const end = el.selectionEnd;
+        const next = cur.slice(0, start) + token + cur.slice(end);
+        const caret = start + token.length;
+        requestAnimationFrame(() => {
+          requestAnimationFrame(() => {
+            el.focus();
+            try {
+              el.setSelectionRange(caret, caret);
+            } catch {
+              /* ignore */
+            }
+          });
+        });
+        return { ...f, description: next };
+      }
+      return { ...f, description: cur + token };
     });
   }, []);
   const scheduleType = normalizeScheduleType(form.jobType);
@@ -1718,7 +1743,30 @@ function AdHocJobFormModal({
             </div>
           )}
           {field("Description", "desc", (
-            <textarea id="desc" value={form.description ?? ""} onChange={(e) => setForm((f) => ({ ...f, description: e.target.value }))} className="w-full border border-[#edeef0] rounded-lg px-3 py-2 text-sm" rows={2} />
+            <div>
+              <textarea
+                ref={descriptionInputRef}
+                id="desc"
+                value={form.description ?? ""}
+                onChange={(e) => setForm((f) => ({ ...f, description: e.target.value }))}
+                className="w-full border border-[#edeef0] rounded-lg px-3 py-2 text-sm"
+                rows={4}
+              />
+              <div className="flex flex-wrap items-center gap-1.5 mt-2">
+                <span className="text-[10px] font-semibold text-gray-400 uppercase tracking-wide mr-0.5">Insert</span>
+                {ADHOC_JOB_NAME_PLACEHOLDER_PILLS.map((p) => (
+                  <button
+                    key={`desc-${p.token}`}
+                    type="button"
+                    onMouseDown={(e) => e.preventDefault()}
+                    onClick={() => insertDescriptionPlaceholder(p.token)}
+                    className="rounded-full border border-[#edeef0] bg-gray-50 px-2.5 py-1 text-xs font-medium text-gray-700 hover:bg-[#f0f1f3] active:bg-[#e8eaed]"
+                  >
+                    {p.label}
+                  </button>
+                ))}
+              </div>
+            </div>
           ))}
           <div className="mb-4">
             <label className="block text-xs font-bold text-gray-500 uppercase mb-1">Approval proof (screenshot or PDF)</label>

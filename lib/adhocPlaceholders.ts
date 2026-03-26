@@ -22,13 +22,16 @@ export function resolveAdHocJobNameTemplate(
 ): string {
   const raw = String(template ?? "").trim();
   if (!raw) return "";
-  return raw.replace(/\{\{\s*([a-z_]+)\s*\}\}/gi, (_match, tokenRaw: string) => {
-    const token = String(tokenRaw ?? "").trim().toLowerCase();
-    if (token === "month") return format(contextDate, "MMMM");
-    if (token === "month_short") return format(contextDate, "MMM");
-    if (token === "year") return format(contextDate, "yyyy");
-    if (token === "month_year") return format(contextDate, "MMMM yyyy");
-    return _match;
-  });
+  return raw.replace(
+    /\{\s*\{?\s*([a-z_]+)\s*\}?\s*\}/gi,
+    (_match, tokenRaw: string) => {
+      const token = String(tokenRaw ?? "").trim().toLowerCase();
+      if (token === "month") return format(contextDate, "MMMM");
+      if (token === "month_short") return format(contextDate, "MMM");
+      if (token === "year") return format(contextDate, "yyyy");
+      if (token === "month_year") return format(contextDate, "MMMM yyyy");
+      return _match;
+    }
+  );
 }
 

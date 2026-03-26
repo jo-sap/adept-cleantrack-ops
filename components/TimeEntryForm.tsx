@@ -13,6 +13,7 @@ import { Save, Zap, Building, ArrowLeft, UserPlus, TrendingUp, TrendingDown, Che
 import { exportFortnightTimesheets } from '../services/exportService';
 import { getGraphAccessToken } from '../lib/graph';
 import { getAdHocJobs } from '../repositories/adHocJobsRepo';
+import { resolveAdHocJobNameTemplate } from '../lib/adhocPlaceholders';
 import {
   listAllTimesheetPeriodNotes,
   upsertTimesheetPeriodNote,
@@ -107,7 +108,11 @@ const TimeEntryForm: React.FC<TimeEntryFormProps> = ({
       .join(", ");
     return {
       id: activeSiteId,
-      name: job.manualSiteName?.trim() || job.jobName || "Ad Hoc Site",
+      name:
+        job.manualSiteName?.trim() ||
+        resolveAdHocJobNameTemplate(job.jobName, currentPeriod.startDate) ||
+        job.jobName ||
+        "Ad Hoc Site",
       address,
       is_active: true,
       budgeted_hours_per_fortnight: 0,
@@ -118,7 +123,7 @@ const TimeEntryForm: React.FC<TimeEntryFormProps> = ({
       cleaner_rates: {},
       visit_frequency: "Ad Hoc",
     } as Site;
-  }, [activeSiteId, fortnightAdHocJobs, adHocJobsForSite, cleaners]);
+  }, [activeSiteId, fortnightAdHocJobs, adHocJobsForSite, cleaners, currentPeriod.startDate]);
   const activeSite = sites.find((s) => s.id === activeSiteId) ?? virtualAdHocSite ?? undefined;
   const activeCleaner = cleaners.find(c => c.id === selectedCleanerId);
 
@@ -145,6 +150,12 @@ const TimeEntryForm: React.FC<TimeEntryFormProps> = ({
     for (let i = 0; i < 14; i++) list.push(addDays(currentPeriod.startDate, i));
     return list;
   }, [currentPeriod]);
+
+  const getDisplayAdHocJobName = useCallback(
+    (job: AdHocJob | undefined | null) =>
+      resolveAdHocJobNameTemplate(job?.jobName, currentPeriod.startDate) || job?.jobName || "",
+    [currentPeriod.startDate]
+  );
 
   const getPlannedHoursForDate = useCallback(
     (site: Site, dateIndex: number, date: Date): number => {
@@ -632,7 +643,7 @@ const TimeEntryForm: React.FC<TimeEntryFormProps> = ({
         if (cancelled) return;
         const periodYmd = format(currentPeriod.startDate, "yyyy-MM-dd");
         const adhocTag = adhocJobId ? `adhocJob:${adhocJobId}` : "";
-        const adhocNameNorm = normalizeSiteLabelForNotes(activeAdHocJob?.jobName ?? "");
+        const adhocNameNorm = normalizeSiteLabelForNotes(getDisplayAdHocJobName(activeAdHocJob));
         const picked = adhocTag
           ? notes.find((n) =>
               !n.cleanerId &&
@@ -660,7 +671,17 @@ const TimeEntryForm: React.FC<TimeEntryFormProps> = ({
     return () => {
       cancelled = true;
     };
-  }, [isAdmin, isManager, activeSiteId, activeSite, currentPeriod.id, currentPeriod.startDate, adhocJobId]);
+  }, [
+    isAdmin,
+    isManager,
+    activeSiteId,
+    activeSite,
+    currentPeriod.id,
+    currentPeriod.startDate,
+    adhocJobId,
+    activeAdHocJob,
+    getDisplayAdHocJobName,
+  ]);
 
   /** Contract work only: block saving hours when actual exceeds per-day plan (or period cap when there is no daily breakdown). */
   const contractWorkSaveBlockReason = useMemo((): string | null => {
@@ -782,7 +803,7 @@ const TimeEntryForm: React.FC<TimeEntryFormProps> = ({
           const adhocTag = adhocJobId ? `adhocJob:${adhocJobId}` : "";
           const noteResult = await upsertTimesheetPeriodNote(token, {
             siteId: isVirtualAdHocContext ? "" : activeSiteId,
-            siteName: activeAdHocJob?.jobName ?? activeSite.name ?? "",
+            siteName: getDisplayAdHocJobName(activeAdHocJob) || activeSite.name || "",
             periodStartYmd: periodYmd,
             cleanerId: null,
             tags: adhocTag ? [adhocTag] : [],
@@ -1132,7 +1153,7 @@ const TimeEntryForm: React.FC<TimeEntryFormProps> = ({
                 </div>
                 {adHocLockedMode ? (
                   <div className="w-full so-input bg-gray-50 px-3 py-2 text-sm text-gray-800 border border-[#edeef0] rounded-lg">
-                    {activeAdHocJob?.jobName ?? "Ad hoc job"}
+                    {getDisplayAdHocJobName(activeAdHocJob) || "Ad hoc job"}
                     {activeAdHocJob?.scheduledDate ? ` • ${activeAdHocJob.scheduledDate}` : ""}
                   </div>
                 ) : (
@@ -1496,7 +1517,7 @@ const TimeEntryForm: React.FC<TimeEntryFormProps> = ({
                       <Briefcase size={20} />
                     </div>
                     <div className="min-w-0">
-                      <h4 className="text-sm font-bold text-gray-900 truncate">{job.jobName}</h4>
+                      <h4 className="text-sm font-bold text-gray-900 truncate">{getDisplayAdHocJobName(job)}</h4>
                       <p className="text-[10px] text-gray-500 truncate uppercase font-bold">{siteLabel}</p>
                       {job.serviceProvider?.trim() ? (
                         <p className="text-[10px] text-gray-600 truncate mt-0.5">

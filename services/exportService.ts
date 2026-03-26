@@ -3,6 +3,7 @@ import { format, addDays } from 'date-fns';
 import { Site, Cleaner, TimeEntry, FortnightPeriod, AdHocJob } from '../types';
 import * as sharepoint from '../lib/sharepoint';
 import { normalizeSiteLabelForNotes } from '../lib/siteNotesLabel';
+import { resolveAdHocJobNameTemplate } from '../lib/adhocPlaceholders';
 import type { SiteNotesExportLookup } from '../repositories/timesheetNotesRepo';
 
 function managerNoteForExport(
@@ -136,8 +137,11 @@ export const exportAdHocJobsToSpreadsheet = (jobs: AdHocJob[], monthLabel: strin
     return String(freq);
   };
 
+  const [y, m] = monthLabel.split('-').map(Number);
+  const monthContextDate = new Date(y, (m || 1) - 1, 1);
+
   const rows: any[][] = jobs.map((j) => [
-    j.jobName ?? '',
+    resolveAdHocJobNameTemplate(j.jobName, monthContextDate) || j.jobName || '',
     scheduleTypeLabel(j.jobType),
     recurrenceSummary(j),
     j.companyName ?? '',
@@ -169,7 +173,6 @@ export const exportAdHocJobsToSpreadsheet = (jobs: AdHocJob[], monthLabel: strin
   const workbook = XLSX.utils.book_new();
   XLSX.utils.book_append_sheet(workbook, worksheet, 'Ad Hoc Jobs');
 
-  const [y, m] = monthLabel.split('-').map(Number);
   const date = new Date(y, (m || 1) - 1, 1);
   const safeMonth = format(date, 'MMMM_yyyy').replace(/\s+/g, '_');
   const fileName = `CleanTrack_AdHocJobs_${safeMonth}`;

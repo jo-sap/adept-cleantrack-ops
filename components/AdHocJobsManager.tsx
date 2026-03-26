@@ -2,7 +2,7 @@
  * Ad Hoc Jobs – list, filters (month, status, manager, site), create/edit form.
  * Admin: all jobs. Manager: jobs assigned to them.
  */
-import React, { useState, useEffect, useCallback, useMemo } from "react";
+import React, { useState, useEffect, useCallback, useMemo, useRef } from "react";
 import { AdHocJob } from "../types";
 import { Plus, X, Loader2, Pencil, AlertCircle, Upload, FileText, Trash2, FileSpreadsheet } from "lucide-react";
 import { useRole } from "../contexts/RoleContext";
@@ -15,6 +15,7 @@ import type { Site } from "../repositories/sitesRepo";
 import { endOfMonth, format } from "date-fns";
 import { getPublicHolidaysInRange } from "../lib/publicHolidays";
 import { generateAdHocOccurrencesForRange } from "../lib/adhocSchedule";
+import { resolveAdHocJobNameTemplate, ADHOC_JOB_NAME_PLACEHOLDER_PILLS } from "../lib/adhocPlaceholders";
 import { exportAdHocJobsToSpreadsheet } from "../services/exportService";
 import { AU_STATES } from "../lib/auStates";
 import { AppSelect } from "./ui";
@@ -72,6 +73,19 @@ export default function AdHocJobsManager() {
   const [submitLoading, setSubmitLoading] = useState(false);
   const [currentUserId, setCurrentUserId] = useState<string | null>(null);
   const [rowDeletingId, setRowDeletingId] = useState<string | null>(null);
+
+  const listMonthDate = useMemo(() => {
+    const parts = String(filterMonth || "").split("-");
+    const y = parseInt(parts[0] ?? "", 10);
+    const m = parseInt(parts[1] ?? "", 10);
+    if (!Number.isFinite(y) || !Number.isFinite(m) || m < 1 || m > 12) return new Date();
+    return new Date(y, m - 1, 1);
+  }, [filterMonth]);
+
+  const getDisplayJobName = useCallback(
+    (job: AdHocJob) => resolveAdHocJobNameTemplate(job.jobName, listMonthDate) || job.jobName || "—",
+    [listMonthDate]
+  );
 
   const showToast = useCallback((msg: string) => {
     setToast(msg);
@@ -151,7 +165,7 @@ export default function AdHocJobsManager() {
 
   const handleDelete = useCallback(
     async (job: AdHocJob) => {
-      if (!window.confirm(`Delete "${job.jobName || "this job"}"? This will remove it from the Ad Hoc Jobs list.`)) {
+      if (!window.confirm(`Delete "${getDisplayJobName(job) || "this job"}"? This will remove it from the Ad Hoc Jobs list.`)) {
         return;
       }
       const token = await getGraphAccessToken();
@@ -167,7 +181,7 @@ export default function AdHocJobsManager() {
         setRowDeletingId(null);
       }
     },
-    [loadJobs, showToast]
+    [loadJobs, showToast, getDisplayJobName]
   );
 
   const closeModal = () => {
@@ -290,9 +304,9 @@ export default function AdHocJobsManager() {
                       type="button"
                       onClick={() => openEdit(j)}
                       className="text-left text-sm font-semibold text-gray-900 break-words hover:underline"
-                      title={j.jobName || "—"}
+                      title={getDisplayJobName(j)}
                     >
-                      {j.jobName || "—"}
+                      {getDisplayJobName(j)}
                     </button>
                     <p className="text-[11px] text-gray-500 mt-1">
                       {scheduleTypeLabel(j.jobType)} · {j.assignedManagerName || "No manager"}
@@ -315,7 +329,7 @@ export default function AdHocJobsManager() {
                       type="button"
                       onClick={() => openEdit(j)}
                       className="touch-target p-2 rounded text-blue-600 hover:bg-blue-50"
-                      aria-label={`Edit ${j.jobName}`}
+                      aria-label={`Edit ${getDisplayJobName(j)}`}
                     >
                       <Pencil size={18} />
                     </button>
@@ -324,7 +338,7 @@ export default function AdHocJobsManager() {
                         type="button"
                         onClick={() => handleDelete(j)}
                         className="touch-target p-2 rounded text-red-600 hover:bg-red-50 disabled:opacity-40"
-                        aria-label={`Delete ${j.jobName}`}
+                        aria-label={`Delete ${getDisplayJobName(j)}`}
                         disabled={rowDeletingId === j.id}
                       >
                         <Trash2 size={18} />
@@ -366,9 +380,9 @@ export default function AdHocJobsManager() {
                       type="button"
                       onClick={() => openEdit(j)}
                       className="text-xs font-semibold text-gray-900 hover:underline text-left block truncate w-full"
-                      title={j.jobName || "—"}
+                      title={getDisplayJobName(j)}
                     >
-                      {j.jobName || "—"}
+                      {getDisplayJobName(j)}
                     </button>
                   </td>
                   <td className="px-2 py-2 text-[11px] text-gray-600 truncate">
@@ -403,7 +417,7 @@ export default function AdHocJobsManager() {
                         type="button"
                         onClick={() => openEdit(j)}
                         className="p-1.5 rounded text-blue-600 hover:bg-blue-50"
-                        aria-label={`Edit ${j.jobName}`}
+                        aria-label={`Edit ${getDisplayJobName(j)}`}
                       >
                         <Pencil size={14} />
                       </button>
@@ -412,7 +426,7 @@ export default function AdHocJobsManager() {
                           type="button"
                           onClick={() => handleDelete(j)}
                           className="p-1.5 rounded text-red-600 hover:bg-red-50 disabled:opacity-40"
-                          aria-label={`Delete ${j.jobName}`}
+                          aria-label={`Delete ${getDisplayJobName(j)}`}
                           disabled={rowDeletingId === j.id}
                         >
                           <Trash2 size={14} />
@@ -531,6 +545,31 @@ function AdHocJobFormModal({
   const [pasteMode, setPasteMode] = useState(false);
   const [pasteError, setPasteError] = useState<string | null>(null);
   const [existingAttachments, setExistingAttachments] = useState<AdHocAttachment[]>([]);
+  const jobNameInputRef = useRef<HTMLInputElement | null>(null);
+  const insertJobNamePlaceholder = useCallback((token: string) => {
+    setForm((f) => {
+      const cur = f.jobName ?? "";
+      const el = jobNameInputRef.current;
+      if (el && typeof el.selectionStart === "number" && typeof el.selectionEnd === "number") {
+        const start = el.selectionStart;
+        const end = el.selectionEnd;
+        const next = cur.slice(0, start) + token + cur.slice(end);
+        const caret = start + token.length;
+        requestAnimationFrame(() => {
+          requestAnimationFrame(() => {
+            el.focus();
+            try {
+              el.setSelectionRange(caret, caret);
+            } catch {
+              /* ignore */
+            }
+          });
+        });
+        return { ...f, jobName: next };
+      }
+      return { ...f, jobName: cur + token };
+    });
+  }, []);
   const scheduleType = normalizeScheduleType(form.jobType);
   const isRecurring = scheduleType === "Recurring";
   const [siteMode, setSiteMode] = useState<"existing" | "new">(() =>
@@ -980,15 +1019,35 @@ function AdHocJobFormModal({
         </div>
         <form onSubmit={handleSubmit} className="p-4 sm:p-6 space-y-3 sm:space-y-4 pb-28 sm:pb-6">
           {field("Job Name *", "jobName", (
-            <input
-              id="jobName"
-              type="text"
-              value={form.jobName}
-              onChange={(e) => setForm((f) => ({ ...f, jobName: e.target.value }))}
-              className="w-full border border-[#edeef0] rounded-lg px-3 py-2 text-sm"
-              placeholder="e.g. Carpet clean – Building A"
-              required
-            />
+            <div>
+              <input
+                ref={jobNameInputRef}
+                id="jobName"
+                type="text"
+                value={form.jobName}
+                onChange={(e) => setForm((f) => ({ ...f, jobName: e.target.value }))}
+                className="w-full border border-[#edeef0] rounded-lg px-3 py-2 text-sm"
+                placeholder="e.g. Carpet clean – Building A"
+                required
+              />
+              <p className="text-[11px] text-gray-500 mt-1.5">
+                Insert a date token at the cursor; it resolves to the relevant month when the job is viewed or exported.
+              </p>
+              <div className="flex flex-wrap items-center gap-1.5 mt-2">
+                <span className="text-[10px] font-semibold text-gray-400 uppercase tracking-wide mr-0.5">Insert</span>
+                {ADHOC_JOB_NAME_PLACEHOLDER_PILLS.map((p) => (
+                  <button
+                    key={p.token}
+                    type="button"
+                    onMouseDown={(e) => e.preventDefault()}
+                    onClick={() => insertJobNamePlaceholder(p.token)}
+                    className="rounded-full border border-[#edeef0] bg-gray-50 px-2.5 py-1 text-xs font-medium text-gray-700 hover:bg-[#f0f1f3] active:bg-[#e8eaed]"
+                  >
+                    {p.label}
+                  </button>
+                ))}
+              </div>
+            </div>
           ))}
           {field("Schedule Type", "jobType", (
             <AppSelect

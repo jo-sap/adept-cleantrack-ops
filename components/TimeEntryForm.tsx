@@ -1158,7 +1158,9 @@ const TimeEntryForm: React.FC<TimeEntryFormProps> = ({
 
     let siteActualTotal = 0;
     let cleanerActualTotal = 0;
+    let remainingBudgetTotal = 0;
     let estPay = 0;
+    let periodOtherHoursTotal = 0;
     let unplannedCount = 0;
     let missingCount = 0;
 
@@ -1178,6 +1180,7 @@ const TimeEntryForm: React.FC<TimeEntryFormProps> = ({
         (sum, h) => sum + h,
         0
       );
+      const otherHours = Math.max(existingDayTotal - existingForCleaner, 0);
       const draftForCleaner =
         draftHours[dateStr] !== undefined ? draftHours[dateStr] : existingForCleaner;
 
@@ -1185,6 +1188,11 @@ const TimeEntryForm: React.FC<TimeEntryFormProps> = ({
       const dayTotal = existingDayTotal - existingForCleaner + draftForCleaner;
       siteActualTotal += dayTotal;
       cleanerActualTotal += draftForCleaner;
+      if (usePeriodCap) {
+        periodOtherHoursTotal += otherHours;
+      } else {
+        remainingBudgetTotal += Math.max(sitePlanForDay - otherHours, 0);
+      }
 
       // Est. Pay: sum (hours × site rate for that day) — weekday / Sat / Sun / PH
       if (draftForCleaner > 0) {
@@ -1201,8 +1209,10 @@ const TimeEntryForm: React.FC<TimeEntryFormProps> = ({
 
     // In period-cap mode, show 0h for this cleaner when they have no hours yet (e.g. newly assigned),
     // so we don't appear to "retain" the previous cleaner's budget. Site cap remains in variance logic.
-    const budgetDisplay =
-      usePeriodCap && cleanerActualTotal === 0 ? 0 : budgetTotal;
+    if (usePeriodCap) {
+      remainingBudgetTotal = Math.max(periodCap - periodOtherHoursTotal, 0);
+    }
+    const budgetDisplay = remainingBudgetTotal;
 
     return {
       budgetTotal,
@@ -1216,6 +1226,35 @@ const TimeEntryForm: React.FC<TimeEntryFormProps> = ({
       periodCap,
     };
   }, [activeSite, selectedCleanerId, dates, draftHours, siteEntriesByDate, adHocEntriesByDate, adhocJobId, activeAdHocJob, activeAdHocPlannedByDate, activeAdHocOccurrences, activeAdHocTotals, currentPeriod]);
+
+  const getMaxAllowedHoursForDate = useCallback(
+    (dateStr: string): number => {
+      if (!activeSite || !selectedCleanerId) return Number.POSITIVE_INFINITY;
+      const isAdHoc = !!adhocJobId;
+      const dayAssignments = (isAdHoc ? adHocEntriesByDate : siteEntriesByDate)[dateStr] || {};
+      const otherHours = Object.entries(dayAssignments)
+        .filter(([cid]) => cid !== selectedCleanerId)
+        .reduce((sum, [, h]) => sum + Number(h), 0);
+      if (isAdHoc) {
+        const planned = activeAdHocPlannedByDate[dateStr] ?? 0;
+        return Math.max(planned - otherHours, 0);
+      }
+      const idx = dates.findIndex((d) => format(d, "yyyy-MM-dd") === dateStr);
+      if (idx < 0) return Number.POSITIVE_INFINITY;
+      const sitePlan = getPlannedHoursForDate(activeSite, idx, dates[idx]);
+      return Math.max(sitePlan - otherHours, 0);
+    },
+    [
+      activeSite,
+      selectedCleanerId,
+      adhocJobId,
+      adHocEntriesByDate,
+      siteEntriesByDate,
+      activeAdHocPlannedByDate,
+      dates,
+      getPlannedHoursForDate,
+    ]
+  );
 
   if (activeSiteId && activeSite) {
     return (
@@ -1507,13 +1546,41 @@ const TimeEntryForm: React.FC<TimeEntryFormProps> = ({
                     <div className={`absolute top-2 right-2 w-1.5 h-1.5 rounded-full ${status.dot}`} />
                     <div className="mb-1.5"><p className="text-[10px] font-bold text-gray-900 uppercase">{format(date, 'EEE')}</p><p className="text-[9px] font-medium text-gray-400">{format(date, 'MMM d')}</p></div>
                     <div className="mt-auto space-y-2">
-                      <div className="flex justify-between items-center"><span className="text-[8px] font-bold text-gray-400">{isAdHoc ? "Scheduled" : "Plan"}</span><span className="text-[9px] font-bold text-gray-800">{planned.toFixed(1)}h</span></div>
+                      <div className="flex justify-between items-center">
+                        <span
+                          className="text-[8px] font-bold text-gray-400"
+                          title={
+                            otherHours > 0
+                              ? Object.entries(dayAssignments)
+                                  .filter(([cid, h]) => cid !== selectedCleanerId && Number(h) > 0)
+                                  .map(
+                                    ([cid, h]) =>
+                                      `${getCleanerDisplayName(cleaners.find((c) => c.id === cid))}: ${Number(h).toFixed(2)}h`
+                                  )
+                                  .join("\n")
+                              : undefined
+                          }
+                        >
+                          {isAdHoc ? "Scheduled" : "Plan"}
+                          {otherHours > 0 ? ` (-${otherHours.toFixed(1)}h)` : ""}
+                        </span>
+                        <span className="text-[9px] font-bold text-gray-800">{planned.toFixed(1)}h</span>
+                      </div>
                       <input
                         ref={el => inputRefs.current[dateStr] = el}
                         type="number"
                         step="0.01"
                         value={draftHours[dateStr] || ''}
-                        onChange={e => handleHourChange(dateStr, e.target.value)}
+                        onChange={e => {
+                          const maxAllowed = getMaxAllowedHoursForDate(dateStr);
+                          const parsed = e.target.value === '' ? 0 : Math.round(parseFloat(e.target.value) * 100) / 100;
+                          if (!Number.isFinite(parsed) || parsed < 0) {
+                            handleHourChange(dateStr, '0');
+                            return;
+                          }
+                          const clamped = Math.min(parsed, maxAllowed);
+                          handleHourChange(dateStr, String(clamped));
+                        }}
                         className="w-full px-2.5 py-2 text-center text-sm font-semibold bg-white border border-gray-300 rounded-lg focus:ring-2 focus:ring-gray-900/15 focus:border-gray-900 shadow-[inset_0_0_0_1px_rgba(15,23,42,0.02)] placeholder-gray-400 disabled:opacity-40 disabled:cursor-not-allowed"
                         disabled={periodLocked || fullyAllocatedToOthers}
                       />

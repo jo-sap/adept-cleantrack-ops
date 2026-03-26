@@ -25,6 +25,20 @@ export interface BudgetPayload {
   visitFrequency?: "Weekly" | "Fortnightly" | "Monthly";
   /** Used when Visit Frequency is Fortnightly or Monthly */
   hoursPerVisit?: number;
+  /**
+   * Optional contract-monthly recurrence (plans hours on specific monthly dates).
+   * When unset/null, Monthly behaves as the existing period-cap implementation.
+   */
+  monthlyMode?: "day_of_month" | "nth_weekday" | null;
+  monthlyWeekOfMonth?: "First" | "Second" | "Third" | "Fourth" | "Last" | null;
+  monthlyWeekday?: number | null; // 0=Sun..6=Sat
+  monthlyDayOfMonth?: number | null; // 1..31
+  /** Monthly exception (delta) add-on for contract sites. */
+  monthlyExceptionHoursDelta?: number | null;
+  monthlyExceptionMode?: "day_of_month" | "nth_weekday" | null;
+  monthlyExceptionWeekOfMonth?: "First" | "Second" | "Third" | "Fourth" | "Last" | null;
+  monthlyExceptionWeekday?: number | null; // 0=Sun..6=Sat
+  monthlyExceptionDayOfMonth?: number | null; // 1..31
   /** Week 2 hours when Visit Frequency is Fortnightly */
   week2SundayHours?: number;
   week2MondayHours?: number;
@@ -58,7 +72,11 @@ export async function createSiteBudget(
   const columns = await sharepoint.getListColumns(accessToken, siteId, listId);
   const map: Record<string, string> = {};
   for (const c of columns) {
-    if (c.displayName) map[c.displayName] = c.name;
+    const display = c.displayName?.trim();
+    if (display) {
+      map[display] = c.name;
+      map[display.toLowerCase()] = c.name;
+    }
     if (c.name) map[c.name] = c.name;
   }
   const budgetNameKey = map["Budget Name"] ?? "Title";
@@ -73,6 +91,35 @@ export async function createSiteBudget(
   const activeKey = map["Active"] ?? "Active";
   const visitFreqKey = map["Visit Frequency"] ?? map["VisitFrequency"] ?? "Visit_x0020_Frequency";
   const hoursPerVisitKey = map["Hours per Visit"] ?? map["HoursPerVisit"] ?? "Hours_x0020_per_x0020_Visit";
+  const monthlyModeKey = map["Monthly Mode"] ?? map["Monthly_x0020_Mode"] ?? undefined;
+  const monthlyWomKey =
+    map["Monthly Week Of Month"] ?? map["Monthly_x0020_Week_x0020_Of_x0020_Month"] ?? undefined;
+  const monthlyWdKey = map["Monthly Weekday"] ?? map["Monthly_x0020_Weekday"] ?? undefined;
+  const monthlyDomKey =
+    map["Monthly Day Of Month"] ?? map["Monthly_x0020_Day_x0020_Of_x0020_Month"] ?? undefined;
+  const ci = (s: string) => s.trim().toLowerCase();
+  const pickFirst = (labels: string[]) => {
+    for (const l of labels) {
+      const v = map[l] ?? map[ci(l)];
+      if (v) return v;
+    }
+    return undefined;
+  };
+
+  const monthlyExceptionHoursDeltaKey = pickFirst([
+    "Monthly Exception Hours Delta",
+    "Monthly_x0020_Exception_x0020_Hours_x0020_Delta",
+  ]);
+  const monthlyExceptionModeKey = pickFirst(["Monthly Exception Mode", "Monthly_x0020_Exception_x0020_Mode"]);
+  const monthlyExceptionWomKey = pickFirst([
+    "Monthly Exception Week Of Month",
+    "Monthly_x0020_Exception_x0020_Week_x0020_Of_x0020_Month",
+  ]);
+  const monthlyExceptionWdKey = pickFirst(["Monthly Exception Weekday", "Monthly_x0020_Exception_x0020_Weekday"]);
+  const monthlyExceptionDomKey = pickFirst([
+    "Monthly Exception Day Of Month",
+    "Monthly_x0020_Exception_x0020_Day_x0020_Of_x0020_Month",
+  ]);
   const w2MonKey = map["Week 2 Monday Hours"] ?? "Week2MondayHours";
   const w2TueKey = map["Week 2 Tuesday Hours"] ?? "Week2TuesdayHours";
   const w2WedKey = map["Week 2 Wednesday Hours"] ?? "Week2WednesdayHours";
@@ -110,6 +157,49 @@ export async function createSiteBudget(
   }
   if (payload.hoursPerVisit !== undefined && payload.hoursPerVisit !== null && payload.hoursPerVisit !== "") {
     fields[hoursPerVisitKey] = Number(payload.hoursPerVisit);
+  }
+  if (monthlyModeKey && payload.monthlyMode !== undefined && payload.monthlyMode !== null) {
+    fields[monthlyModeKey] = payload.monthlyMode;
+  }
+  if (monthlyWomKey && payload.monthlyWeekOfMonth !== undefined && payload.monthlyWeekOfMonth !== null) {
+    fields[monthlyWomKey] = payload.monthlyWeekOfMonth;
+  }
+  if (monthlyWdKey && payload.monthlyWeekday !== undefined && payload.monthlyWeekday !== null) {
+    fields[monthlyWdKey] = payload.monthlyWeekday;
+  }
+  if (monthlyDomKey && payload.monthlyDayOfMonth !== undefined && payload.monthlyDayOfMonth !== null) {
+    fields[monthlyDomKey] = payload.monthlyDayOfMonth;
+  }
+  if (
+    monthlyExceptionHoursDeltaKey &&
+    payload.monthlyExceptionHoursDelta !== undefined &&
+    payload.monthlyExceptionHoursDelta !== null
+  ) {
+    fields[monthlyExceptionHoursDeltaKey] = payload.monthlyExceptionHoursDelta;
+  }
+  if (monthlyExceptionModeKey && payload.monthlyExceptionMode !== undefined && payload.monthlyExceptionMode !== null) {
+    fields[monthlyExceptionModeKey] = payload.monthlyExceptionMode;
+  }
+  if (
+    monthlyExceptionWomKey &&
+    payload.monthlyExceptionWeekOfMonth !== undefined &&
+    payload.monthlyExceptionWeekOfMonth !== null
+  ) {
+    fields[monthlyExceptionWomKey] = payload.monthlyExceptionWeekOfMonth;
+  }
+  if (
+    monthlyExceptionWdKey &&
+    payload.monthlyExceptionWeekday !== undefined &&
+    payload.monthlyExceptionWeekday !== null
+  ) {
+    fields[monthlyExceptionWdKey] = payload.monthlyExceptionWeekday;
+  }
+  if (
+    monthlyExceptionDomKey &&
+    payload.monthlyExceptionDayOfMonth !== undefined &&
+    payload.monthlyExceptionDayOfMonth !== null
+  ) {
+    fields[monthlyExceptionDomKey] = payload.monthlyExceptionDayOfMonth;
   }
   if (payload.week2SundayHours !== undefined) fields[w2SunKey] = payload.week2SundayHours;
   if (payload.week2MondayHours !== undefined) fields[w2MonKey] = payload.week2MondayHours;
@@ -158,6 +248,16 @@ export interface SiteBudgetHours {
   /** Weekly | Fortnightly | Monthly */
   visitFrequency?: string;
   hoursPerVisit?: number;
+  monthlyMode?: "day_of_month" | "nth_weekday" | null;
+  monthlyWeekOfMonth?: "First" | "Second" | "Third" | "Fourth" | "Last" | null;
+  monthlyWeekday?: number | null;
+  monthlyDayOfMonth?: number | null;
+  /** Monthly exception (delta) add-on for contract sites. */
+  monthlyExceptionHoursDelta?: number | null;
+  monthlyExceptionMode?: "day_of_month" | "nth_weekday" | null;
+  monthlyExceptionWeekOfMonth?: "First" | "Second" | "Third" | "Fourth" | "Last" | null;
+  monthlyExceptionWeekday?: number | null;
+  monthlyExceptionDayOfMonth?: number | null;
   /** Week 2 day hours when Fortnightly */
   week2Sunday?: number;
   week2Monday?: number;
@@ -225,6 +325,15 @@ const BUDGET_MERGE_OPTIONAL_KEYS: (keyof SiteBudgetHours)[] = [
   "week2Friday",
   "week2Saturday",
   "hoursPerVisit",
+  "monthlyMode",
+  "monthlyWeekOfMonth",
+  "monthlyWeekday",
+  "monthlyDayOfMonth",
+  "monthlyExceptionHoursDelta",
+  "monthlyExceptionMode",
+  "monthlyExceptionWeekOfMonth",
+  "monthlyExceptionWeekday",
+  "monthlyExceptionDayOfMonth",
 ];
 
 /**
@@ -255,9 +364,10 @@ function mergeBudgetRowsForSameSite(
   for (const key of BUDGET_MERGE_OPTIONAL_KEYS) {
     const pv = merged[key];
     const sv = secondary[key];
-    if ((pv === undefined || pv === null) && typeof sv === "number" && !Number.isNaN(sv)) {
-      merged = { ...merged, [key]: sv } as SiteBudgetHours;
-    }
+    const hasPrimary = pv !== undefined && pv !== null;
+    const hasSecondary =
+      sv !== undefined && sv !== null && (typeof sv !== "number" || !Number.isNaN(sv));
+    if (!hasPrimary && hasSecondary) merged = { ...merged, [key]: sv } as SiteBudgetHours;
   }
   return merged;
 }
@@ -277,12 +387,89 @@ function findFortnightCostBudgetFromFields(f: Record<string, unknown>): number |
   return undefined;
 }
 
+/** Display name + internal name lookup (same as create/update budget). */
+function buildBudgetColumnMap(columns: Array<{ name: string; displayName: string }>): Record<string, string> {
+  const map: Record<string, string> = {};
+  for (const c of columns) {
+    const display = c.displayName?.trim();
+    if (display) {
+      map[display] = c.name;
+      map[display.toLowerCase()] = c.name;
+    }
+    if (c.name) map[c.name] = c.name;
+  }
+  return map;
+}
+
+/**
+ * Read a list item field using SharePoint column display names (resolves real internal Graph field keys).
+ * Graph item.fields keys are internal names, which often differ from our hardcoded guesses.
+ */
+function readBudgetFieldRaw(
+  f: Record<string, unknown>,
+  colMap: Record<string, string>,
+  displayNames: string[]
+): unknown {
+  for (const dn of displayNames) {
+    const key = colMap[dn] ?? colMap[dn.toLowerCase()];
+    if (!key) continue;
+    if (!Object.prototype.hasOwnProperty.call(f, key)) continue;
+    return f[key];
+  }
+  return undefined;
+}
+
+/** Map SharePoint Choice / text values to app monthly mode ids. */
+function normalizeMonthlyRecurrenceMode(raw: unknown): "day_of_month" | "nth_weekday" | null {
+  if (raw == null) return null;
+  const s = String(raw).trim();
+  if (!s) return null;
+  const compact = s.toLowerCase().replace(/\s+/g, "_").replace(/-/g, "_");
+  if (compact === "day_of_month" || compact === "dayofmonth") return "day_of_month";
+  if (compact === "nth_weekday" || compact === "nthweekday") return "nth_weekday";
+  const lower = s.toLowerCase();
+  if (lower.includes("nth") && lower.includes("week")) return "nth_weekday";
+  if (lower.includes("day") && lower.includes("month")) return "day_of_month";
+  return null;
+}
+
+/**
+ * Returns display names of expected monthly-exception columns that are missing from the list schema.
+ * Use after save to explain why values did not persist (writes are skipped when columns do not exist).
+ */
+export async function getMissingMonthlyExceptionBudgetColumns(
+  accessToken: string,
+  exceptionMode?: "day_of_month" | "nth_weekday" | ""
+): Promise<string[]> {
+  const { siteId, listId } = await getSiteAndListId(accessToken);
+  const columns = await sharepoint.getListColumns(accessToken, siteId, listId);
+  const colMap = buildBudgetColumnMap(columns);
+  const base = ["Monthly Exception Hours Delta", "Monthly Exception Mode"];
+  let requiredDisplayNames: string[] = base;
+  if (exceptionMode === "day_of_month") {
+    requiredDisplayNames = [...base, "Monthly Exception Day Of Month"];
+  } else if (exceptionMode === "nth_weekday") {
+    requiredDisplayNames = [...base, "Monthly Exception Week Of Month", "Monthly Exception Weekday"];
+  } else {
+    // Unknown/empty: be conservative and require everything.
+    requiredDisplayNames = [
+      ...base,
+      "Monthly Exception Day Of Month",
+      "Monthly Exception Week Of Month",
+      "Monthly Exception Weekday",
+    ];
+  }
+  return requiredDisplayNames.filter((dn) => !colMap[dn]);
+}
+
 /** Load all site budgets and return hours per site (prefer budget with highest week total when multiple exist).
  * Also includes budgets with empty Site, keyed by "name:{Budget Name}" so they can be matched and updated. */
 export async function getSiteBudgets(
   accessToken: string
 ): Promise<Record<string, SiteBudgetHours>> {
   const { siteId, listId } = await getSiteAndListId(accessToken);
+  const columns = await sharepoint.getListColumns(accessToken, siteId, listId);
+  const colMap = buildBudgetColumnMap(columns);
   const items = await sharepoint.getListItems(accessToken, siteId, listId);
   const result: Record<string, SiteBudgetHours> = {};
   const activeKey = "Active";
@@ -329,6 +516,43 @@ export async function getSiteBudgets(
   };
   const visitFreqKeys = ["VisitFrequency", "Visit_x0020_Frequency", "Visit Frequency"];
   const hoursPerVisitKeys = ["HoursPerVisit", "Hours_x0020_per_x0020_Visit", "Hours per Visit"];
+  const monthlyModeKeys = ["MonthlyMode", "Monthly_x0020_Mode", "Monthly Mode"];
+  const monthlyWomKeys = [
+    "MonthlyWeekOfMonth",
+    "Monthly_x0020_Week_x0020_Of_x0020_Month",
+    "Monthly Week Of Month",
+  ];
+  const monthlyWdKeys = ["MonthlyWeekday", "Monthly_x0020_Weekday", "Monthly Weekday"];
+  const monthlyDomKeys = [
+    "MonthlyDayOfMonth",
+    "Monthly_x0020_Day_x0020_Of_x0020_Month",
+    "Monthly Day Of Month",
+  ];
+  const monthlyExceptionHoursDeltaKeys = [
+    "MonthlyExceptionHoursDelta",
+    "Monthly_x0020_Exception_x0020_Hours_x0020_Delta",
+    "Monthly Exception Hours Delta",
+  ];
+  const monthlyExceptionModeKeys = [
+    "MonthlyExceptionMode",
+    "Monthly_x0020_Exception_x0020_Mode",
+    "Monthly Exception Mode",
+  ];
+  const monthlyExceptionWomKeys = [
+    "MonthlyExceptionWeekOfMonth",
+    "Monthly_x0020_Exception_x0020_Week_x0020_Of_x0020_Month",
+    "Monthly Exception Week Of Month",
+  ];
+  const monthlyExceptionWdKeys = [
+    "MonthlyExceptionWeekday",
+    "Monthly_x0020_Exception_x0020_Weekday",
+    "Monthly Exception Weekday",
+  ];
+  const monthlyExceptionDomKeys = [
+    "MonthlyExceptionDayOfMonth",
+    "Monthly_x0020_Exception_x0020_Day_x0020_Of_x0020_Month",
+    "Monthly Exception Day Of Month",
+  ];
   /** Schema: Weekday Labour Rate (renamed from Budget Labour Rate), Saturday/Sunday/PH Labour Rate, Fortnight Cost Budget — all Currency in SharePoint. */
   const fortnightCostBudgetKeys = [
     "Fortnight Cost Budget",
@@ -439,6 +663,65 @@ export async function getSiteBudgets(
     const visitFrequencyRaw = getFirst(visitFreqKeys);
     const visitFrequency = normalizeVisitFreq(visitFrequencyRaw);
     const hoursPerVisit = getFirstNum(hoursPerVisitKeys);
+
+    const monthlyModeMapped = readBudgetFieldRaw(f, colMap, ["Monthly Mode"]);
+    const monthlyMode = normalizeMonthlyRecurrenceMode(
+      monthlyModeMapped !== undefined ? monthlyModeMapped : getFirst(monthlyModeKeys)
+    );
+
+    const monthlyWomMapped = readBudgetFieldRaw(f, colMap, ["Monthly Week Of Month"]);
+    const monthlyWomRaw =
+      monthlyWomMapped !== undefined ? monthlyWomMapped : getFirst(monthlyWomKeys);
+    const monthlyWomStr = monthlyWomRaw != null && String(monthlyWomRaw).trim() !== "" ? String(monthlyWomRaw).trim() : "";
+    const monthlyWeekOfMonth = (
+      ["First", "Second", "Third", "Fourth", "Last"] as const
+    ).find((w) => w.toLowerCase() === monthlyWomStr.toLowerCase());
+
+    const monthlyWeekdayMapped = readBudgetFieldRaw(f, colMap, ["Monthly Weekday"]);
+    const monthlyWeekday =
+      monthlyWeekdayMapped !== undefined && monthlyWeekdayMapped !== null && monthlyWeekdayMapped !== ""
+        ? toNum(monthlyWeekdayMapped)
+        : getFirstNum(monthlyWdKeys);
+
+    const monthlyDomMapped = readBudgetFieldRaw(f, colMap, ["Monthly Day Of Month"]);
+    const monthlyDomRaw =
+      monthlyDomMapped !== undefined ? monthlyDomMapped : undefined;
+    const monthlyDayOfMonth =
+      monthlyDomRaw !== undefined && monthlyDomRaw !== null && monthlyDomRaw !== ""
+        ? toNum(monthlyDomRaw)
+        : getFirstNum(monthlyDomKeys);
+
+    const monthlyExcDeltaRaw = readBudgetFieldRaw(f, colMap, ["Monthly Exception Hours Delta"]);
+    const monthlyExceptionHoursDelta =
+      monthlyExcDeltaRaw !== undefined && monthlyExcDeltaRaw !== null && monthlyExcDeltaRaw !== ""
+        ? toNum(monthlyExcDeltaRaw)
+        : getFirstNum(monthlyExceptionHoursDeltaKeys);
+
+    const monthlyExcModeMapped = readBudgetFieldRaw(f, colMap, ["Monthly Exception Mode"]);
+    const monthlyExceptionMode = normalizeMonthlyRecurrenceMode(
+      monthlyExcModeMapped !== undefined ? monthlyExcModeMapped : getFirst(monthlyExceptionModeKeys)
+    );
+
+    const monthlyExcWomMapped = readBudgetFieldRaw(f, colMap, ["Monthly Exception Week Of Month"]);
+    const monthlyExcWomRaw =
+      monthlyExcWomMapped !== undefined ? monthlyExcWomMapped : getFirst(monthlyExceptionWomKeys);
+    const monthlyExcWomStr =
+      monthlyExcWomRaw != null && String(monthlyExcWomRaw).trim() !== "" ? String(monthlyExcWomRaw).trim() : "";
+    const monthlyExceptionWeekOfMonth = (
+      ["First", "Second", "Third", "Fourth", "Last"] as const
+    ).find((w) => w.toLowerCase() === monthlyExcWomStr.toLowerCase());
+
+    const monthlyExcWdRaw = readBudgetFieldRaw(f, colMap, ["Monthly Exception Weekday"]);
+    const monthlyExceptionWeekday =
+      monthlyExcWdRaw !== undefined && monthlyExcWdRaw !== null && monthlyExcWdRaw !== ""
+        ? toNum(monthlyExcWdRaw)
+        : getFirstNum(monthlyExceptionWdKeys);
+
+    const monthlyExcDomRaw = readBudgetFieldRaw(f, colMap, ["Monthly Exception Day Of Month"]);
+    const monthlyExceptionDayOfMonth =
+      monthlyExcDomRaw !== undefined && monthlyExcDomRaw !== null && monthlyExcDomRaw !== ""
+        ? toNum(monthlyExcDomRaw)
+        : getFirstNum(monthlyExceptionDomKeys);
     const fortnightCostBudget =
       getFirstCurrencyNum(fortnightCostBudgetKeys) ??
       getFirstNum(fortnightCostBudgetKeys) ??
@@ -475,6 +758,15 @@ export async function getSiteBudgets(
       fortnightCap,
       ...(visitFrequency && { visitFrequency }),
       ...(hoursPerVisit != null && { hoursPerVisit }),
+      ...(monthlyMode && { monthlyMode }),
+      ...(monthlyWeekOfMonth && { monthlyWeekOfMonth }),
+      ...(monthlyWeekday != null && { monthlyWeekday }),
+      ...(monthlyDayOfMonth != null && { monthlyDayOfMonth }),
+      ...(monthlyExceptionHoursDelta != null && { monthlyExceptionHoursDelta }),
+      ...(monthlyExceptionMode && { monthlyExceptionMode }),
+      ...(monthlyExceptionWeekOfMonth && { monthlyExceptionWeekOfMonth }),
+      ...(monthlyExceptionWeekday != null && { monthlyExceptionWeekday }),
+      ...(monthlyExceptionDayOfMonth != null && { monthlyExceptionDayOfMonth }),
       ...(fortnightCostBudget != null && fortnightCostBudget >= 0 && { fortnightCostBudget }),
       ...(weekdayLabourRate != null && weekdayLabourRate >= 0 && { weekdayLabourRate }),
       ...(saturdayLabourRate != null && saturdayLabourRate >= 0 && { saturdayLabourRate }),
@@ -518,6 +810,16 @@ export interface UpdateBudgetPayload {
   /** Weekly | Fortnightly | Monthly */
   visitFrequency?: "Weekly" | "Fortnightly" | "Monthly";
   hoursPerVisit?: number;
+  monthlyMode?: "day_of_month" | "nth_weekday" | null;
+  monthlyWeekOfMonth?: "First" | "Second" | "Third" | "Fourth" | "Last" | null;
+  monthlyWeekday?: number | null;
+  monthlyDayOfMonth?: number | null;
+  /** Monthly exception (delta) add-on for contract sites. */
+  monthlyExceptionHoursDelta?: number | null;
+  monthlyExceptionMode?: "day_of_month" | "nth_weekday" | null;
+  monthlyExceptionWeekOfMonth?: "First" | "Second" | "Third" | "Fourth" | "Last" | null;
+  monthlyExceptionWeekday?: number | null;
+  monthlyExceptionDayOfMonth?: number | null;
   week2SundayHours?: number;
   week2MondayHours?: number;
   week2TuesdayHours?: number;
@@ -542,7 +844,11 @@ export async function updateSiteBudget(
   const columns = await sharepoint.getListColumns(accessToken, siteId, listId);
   const map: Record<string, string> = {};
   for (const c of columns) {
-    if (c.displayName) map[c.displayName] = c.name;
+    const display = c.displayName?.trim();
+    if (display) {
+      map[display] = c.name;
+      map[display.toLowerCase()] = c.name;
+    }
     if (c.name) map[c.name] = c.name;
   }
   const monKey = map["Monday Hours"] ?? "MondayHours";
@@ -555,6 +861,38 @@ export async function updateSiteBudget(
   const activeKey = map["Active"] ?? "Active";
   const visitFreqKey = map["Visit Frequency"] ?? map["VisitFrequency"] ?? "Visit_x0020_Frequency";
   const hoursPerVisitKey = map["Hours per Visit"] ?? map["HoursPerVisit"] ?? "Hours_x0020_per_x0020_Visit";
+
+  const monthlyModeKey = map["Monthly Mode"] ?? map["Monthly_x0020_Mode"] ?? undefined;
+  const monthlyWomKey =
+    map["Monthly Week Of Month"] ?? map["Monthly_x0020_Week_x0020_Of_x0020_Month"] ?? undefined;
+  const monthlyWdKey = map["Monthly Weekday"] ?? map["Monthly_x0020_Weekday"] ?? undefined;
+  const monthlyDomKey =
+    map["Monthly Day Of Month"] ?? map["Monthly_x0020_Day_x0020_Of_x0020_Month"] ?? undefined;
+
+  const ci = (s: string) => s.trim().toLowerCase();
+  const pickFirst = (labels: string[]) => {
+    for (const l of labels) {
+      const v = map[l] ?? map[ci(l)];
+      if (v) return v;
+    }
+    return undefined;
+  };
+
+  const monthlyExceptionHoursDeltaKey = pickFirst([
+    "Monthly Exception Hours Delta",
+    "Monthly_x0020_Exception_x0020_Hours_x0020_Delta",
+  ]);
+  const monthlyExceptionModeKey = pickFirst(["Monthly Exception Mode", "Monthly_x0020_Exception_x0020_Mode"]);
+  const monthlyExceptionWomKey = pickFirst([
+    "Monthly Exception Week Of Month",
+    "Monthly_x0020_Exception_x0020_Week_x0020_Of_x0020_Month",
+  ]);
+  const monthlyExceptionWdKey = pickFirst(["Monthly Exception Weekday", "Monthly_x0020_Exception_x0020_Weekday"]);
+  const monthlyExceptionDomKey = pickFirst([
+    "Monthly Exception Day Of Month",
+    "Monthly_x0020_Exception_x0020_Day_x0020_Of_x0020_Month",
+  ]);
+
   const w2MonKey = map["Week 2 Monday Hours"] ?? "Week2MondayHours";
   const w2TueKey = map["Week 2 Tuesday Hours"] ?? "Week2TuesdayHours";
   const w2WedKey = map["Week 2 Wednesday Hours"] ?? "Week2WednesdayHours";
@@ -590,6 +928,53 @@ export async function updateSiteBudget(
     const val = payload.hoursPerVisit;
     const num = typeof val === "number" ? val : val === "" ? 0 : Number(val);
     if (!Number.isNaN(num)) fields[hoursPerVisitKey] = num;
+  }
+  if (monthlyModeKey && payload.monthlyMode !== undefined && payload.monthlyMode !== null) {
+    fields[monthlyModeKey] = payload.monthlyMode;
+  }
+  if (monthlyWomKey && payload.monthlyWeekOfMonth !== undefined && payload.monthlyWeekOfMonth !== null) {
+    fields[monthlyWomKey] = payload.monthlyWeekOfMonth;
+  }
+  if (monthlyWdKey && payload.monthlyWeekday !== undefined && payload.monthlyWeekday !== null) {
+    fields[monthlyWdKey] = payload.monthlyWeekday;
+  }
+  if (monthlyDomKey && payload.monthlyDayOfMonth !== undefined && payload.monthlyDayOfMonth !== null) {
+    fields[monthlyDomKey] = payload.monthlyDayOfMonth;
+  }
+  if (
+    monthlyExceptionHoursDeltaKey &&
+    payload.monthlyExceptionHoursDelta !== undefined &&
+    payload.monthlyExceptionHoursDelta !== null
+  ) {
+    fields[monthlyExceptionHoursDeltaKey] = payload.monthlyExceptionHoursDelta;
+  }
+  if (
+    monthlyExceptionModeKey &&
+    payload.monthlyExceptionMode !== undefined &&
+    payload.monthlyExceptionMode !== null
+  ) {
+    fields[monthlyExceptionModeKey] = payload.monthlyExceptionMode;
+  }
+  if (
+    monthlyExceptionWomKey &&
+    payload.monthlyExceptionWeekOfMonth !== undefined &&
+    payload.monthlyExceptionWeekOfMonth !== null
+  ) {
+    fields[monthlyExceptionWomKey] = payload.monthlyExceptionWeekOfMonth;
+  }
+  if (
+    monthlyExceptionWdKey &&
+    payload.monthlyExceptionWeekday !== undefined &&
+    payload.monthlyExceptionWeekday !== null
+  ) {
+    fields[monthlyExceptionWdKey] = payload.monthlyExceptionWeekday;
+  }
+  if (
+    monthlyExceptionDomKey &&
+    payload.monthlyExceptionDayOfMonth !== undefined &&
+    payload.monthlyExceptionDayOfMonth !== null
+  ) {
+    fields[monthlyExceptionDomKey] = payload.monthlyExceptionDayOfMonth;
   }
   if (payload.week2SundayHours !== undefined) fields[w2SunKey] = payload.week2SundayHours;
   if (payload.week2MondayHours !== undefined) fields[w2MonKey] = payload.week2MondayHours;

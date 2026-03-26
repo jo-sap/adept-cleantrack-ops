@@ -9,6 +9,7 @@ import { useAppAuth } from '../contexts/AppAuthContext';
 import { getGraphAccessToken } from '../lib/graph';
 import { createSiteCleanerAssignment, getSiteCleanerAssignments, updateSiteCleanerAssignment } from '../repositories/assignedCleanersRepo';
 import { listAllTimesheetPeriodNotes, pickSiteNoteForPeriod } from '../repositories/timesheetNotesRepo';
+import { nthWeekdayOfMonth } from '../utils';
 
 interface SiteDetailProps {
   site: Site;
@@ -126,7 +127,6 @@ const SiteDetail: React.FC<SiteDetailProps> = ({ site, cleaners, entries, curren
     return { actualLaborCost, fortnightRevenue, grossProfit, margin };
   }, [periodEntries, cleaners, site]);
 
-  const budgetedHoursPerFortnight = (site as any).budgeted_hours_per_fortnight ?? (site as any).budgetedHoursPerFortnight ?? 0;
   const dailyBudgetsArr = (site as any).daily_budgets ?? (site as any).dailyBudgets ?? [];
   const dailyBudgetsWeek2Arr = (site as any).daily_budgets_week2 ?? (site as any).dailyBudgetsWeek2 ?? [];
 
@@ -217,6 +217,11 @@ const SiteDetail: React.FC<SiteDetailProps> = ({ site, cleaners, entries, curren
 
   const dailyStats = useMemo(() => {
     const stats = [];
+    const visit = String((site as any).visit_frequency ?? (site as any).visitFrequency ?? "").trim().toLowerCase();
+    const hasMonthlyRecurrence = visit === "monthly" && !!(site as any).monthlyMode;
+    const hoursPerVisit = hasMonthlyRecurrence ? (site as any).budgeted_hours_per_fortnight * 2 : 0;
+    const excDelta = (site as any).monthlyExceptionHoursDelta ?? 0;
+    const excMode = (site as any).monthlyExceptionMode ?? null;
     for (let i = 0; i < 14; i++) {
       const day = addDays(currentPeriod.startDate, i);
       const dayStr = format(day, 'yyyy-MM-dd');
@@ -225,7 +230,52 @@ const SiteDetail: React.FC<SiteDetailProps> = ({ site, cleaners, entries, curren
         .filter(e => e.date === dayStr)
         .reduce((sum, e) => sum + e.hours, 0);
 
-      const dayBudget = getPlannedForIndex(i, dayOfWeek);
+      let dayBudget = getPlannedForIndex(i, dayOfWeek);
+      if (hasMonthlyRecurrence) {
+        if ((site as any).monthlyMode === "day_of_month") {
+          const dom = (site as any).monthlyDayOfMonth;
+          if (dom != null && dom > 0) {
+            const candidate = new Date(day.getFullYear(), day.getMonth(), dom);
+            if (candidate.getMonth() === day.getMonth() && candidate.getDate() === day.getDate()) {
+              dayBudget = hoursPerVisit;
+            } else {
+              dayBudget = 0;
+            }
+          } else {
+            dayBudget = 0;
+          }
+        } else {
+          // nth_weekday
+          const which = (site as any).monthlyWeekOfMonth;
+          const weekday = (site as any).monthlyWeekday;
+          const occ = which && weekday != null ? nthWeekdayOfMonth(day.getFullYear(), day.getMonth(), weekday, which) : null;
+          dayBudget = occ && format(occ, "yyyy-MM-dd") === format(day, "yyyy-MM-dd") ? hoursPerVisit : 0;
+        }
+      }
+
+      // Monthly exception (delta): adds on top of the site's normal per-day plan.
+      if (excDelta > 0 && excMode) {
+        const year = day.getFullYear();
+        const monthIndex0 = day.getMonth();
+        if (excMode === "day_of_month") {
+          const dom = (site as any).monthlyExceptionDayOfMonth;
+          if (dom != null && dom > 0) {
+            const candidate = new Date(year, monthIndex0, dom);
+            if (candidate.getMonth() === monthIndex0 && candidate.getDate() === day.getDate()) {
+              dayBudget += excDelta;
+            }
+          }
+        } else {
+          const which = (site as any).monthlyExceptionWeekOfMonth;
+          const weekday = (site as any).monthlyExceptionWeekday;
+          if (which && weekday != null) {
+            const occ = nthWeekdayOfMonth(year, monthIndex0, weekday, which);
+            if (occ && format(occ, "yyyy-MM-dd") === format(day, "yyyy-MM-dd")) {
+              dayBudget += excDelta;
+            }
+          }
+        }
+      }
       const isScheduled = dayBudget > 0;
 
       stats.push({
@@ -239,6 +289,8 @@ const SiteDetail: React.FC<SiteDetailProps> = ({ site, cleaners, entries, curren
     }
     return stats;
   }, [site, periodEntries, currentPeriod, dailyBudgetsArr, getPlannedForIndex]);
+
+  const budgetedHoursPerFortnight = dailyStats.reduce((sum, s) => sum + (s.budget ?? 0), 0);
 
   const totalActualHours = periodEntries.reduce((sum, e) => sum + e.hours, 0);
   const hourVariance = totalActualHours - budgetedHoursPerFortnight;

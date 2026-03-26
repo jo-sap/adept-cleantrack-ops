@@ -17,6 +17,28 @@ export interface Site {
   daily_budgets: number[];
   /** Fortnightly budgets: optional Week 2 day hours (Sun..Sat). */
   daily_budgets_week2?: number[];
+  /**
+   * Contract Monthly recurrence (mirrors Ad Hoc monthly configuration).
+   * When set, the app plans hours on specific monthly dates (e.g. 3rd Thu).
+   * When not set, current behavior remains: Monthly uses a period cap (Hours per Visit ÷ 2).
+   */
+  monthlyMode?: "day_of_month" | "nth_weekday" | null;
+  monthlyWeekOfMonth?: "First" | "Second" | "Third" | "Fourth" | "Last" | null;
+  monthlyWeekday?: number | null; // 0=Sun..6=Sat
+  monthlyDayOfMonth?: number | null; // 1..31
+
+  /**
+   * Monthly exception (delta) rule for contract Sites.
+   * Adds extra planned hours on a single monthly occurrence date (e.g. +2 on 3rd Thu),
+   * on top of the site's normal weekly/fortnightly plan.
+   *
+   * Enable/disable by setting hours delta <= 0 (or null).
+   */
+  monthlyExceptionHoursDelta?: number | null;
+  monthlyExceptionMode?: "day_of_month" | "nth_weekday" | null;
+  monthlyExceptionWeekOfMonth?: "First" | "Second" | "Third" | "Fourth" | "Last" | null;
+  monthlyExceptionWeekday?: number | null; // 0=Sun..6=Sat
+  monthlyExceptionDayOfMonth?: number | null; // 1..31
   assigned_cleaner_ids: string[];
   monthly_revenue: number;
   financial_budget: number;

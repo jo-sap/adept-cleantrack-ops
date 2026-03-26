@@ -1,4 +1,4 @@
-import { format, startOfYear, addDays, differenceInDays, startOfDay, endOfDay, isWithinInterval } from 'date-fns';
+import { format, startOfYear, addDays, differenceInDays, startOfDay, endOfDay, isWithinInterval, endOfMonth, getDay } from 'date-fns';
 
 // Reference start date for fortnight cycles: first Monday of 2024
 const REFERENCE_START = new Date(2024, 0, 1);
@@ -15,6 +15,43 @@ export const getFortnightForDate = (date: Date) => {
     endDate,
     id: `${format(startDate, 'yyyy-MM-dd')}_${format(endDate, 'yyyy-MM-dd')}`
   };
+};
+
+/**
+ * Default fortnight used for timesheet completion.
+ *
+ * Operationally, timesheets are completed on the Wednesday after the fortnight ends.
+ * That means during the first week of a new fortnight (Mon–Sun, i.e. until its second-week Monday),
+ * to the previous fortnight to prevent accidental entry into the not-yet-completed one.
+ */
+export const getFortnightForTimesheetCompletion = (date: Date) => {
+  const current = getFortnightForDate(date);
+  const today = startOfDay(date);
+
+  // Cutover from the new fortnight happens on Monday of its second week (startDate + 7).
+  const cutoff = addDays(startOfDay(current.startDate), 7);
+  if (today < cutoff) {
+    // Previous fortnight ends the day before the current fortnight starts.
+    return getFortnightForDate(addDays(current.startDate, -1));
+  }
+  return current;
+};
+
+/**
+ * Viewing lock rule:
+ * - A fortnight is editable/viewable starting from its "second week" (startDate + 7 days).
+ * - Fully completed fortnights remain unlocked.
+ */
+export const isFortnightLockedForView = (now: Date, startDate: Date, endDate: Date): boolean => {
+  const n = startOfDay(now);
+  const start = startOfDay(startDate);
+  const end = startOfDay(endDate);
+
+  // If the fortnight has ended, always allow view.
+  if (n > end) return false;
+
+  const unlockAt = addDays(start, 7);
+  return n < unlockAt;
 };
 
 export const getAllFortnightsInRange = (start: Date, end: Date) => {
@@ -39,6 +76,37 @@ export const getStatusBg = (current: number, budget: number) => {
   if (current < budget * 0.8) return 'bg-amber-50 text-amber-700 border-amber-200';
   return 'bg-green-50 text-green-700 border-green-200';
 };
+
+/**
+ * nth weekday within a given month (0=Sun..6=Sat).
+ * Example: 3rd Thursday => which="Third", weekday=4.
+ */
+export function nthWeekdayOfMonth(
+  year: number,
+  monthIndex0: number,
+  weekday: number,
+  which: string
+): Date | null {
+  const first = new Date(year, monthIndex0, 1);
+  const last = endOfMonth(first);
+  const whichLower = String(which ?? '').toLowerCase();
+  if (whichLower === "last") {
+    // Walk backwards from last day until weekday matches.
+    let d = startOfDay(last);
+    while (getDay(d) !== weekday) d = addDays(d, -1);
+    return d;
+  }
+  const order = ["first", "second", "third", "fourth"];
+  const idx = order.indexOf(whichLower);
+  if (idx < 0) return null;
+  // Find first occurrence of weekday in month.
+  let d = startOfDay(first);
+  while (getDay(d) !== weekday) d = addDays(d, 1);
+  d = addDays(d, idx * 7);
+  // If overflowed to next month, invalid.
+  if (d.getMonth() !== monthIndex0) return null;
+  return d;
+}
 
 /** Round a number to 2 decimal places for currency storage (avoids floating-point drift). */
 export function roundCurrency(value: number): number {

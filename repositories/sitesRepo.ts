@@ -26,6 +26,17 @@ export type SiteBudgetForApp = {
   saturdayLabourRate?: number;
   sundayLabourRate?: number;
   phLabourRate?: number;
+  /** Contract monthly recurrence (mirrors Ad Hoc monthly configuration). */
+  monthlyMode?: "day_of_month" | "nth_weekday" | null;
+  monthlyWeekOfMonth?: "First" | "Second" | "Third" | "Fourth" | "Last" | null;
+  monthlyWeekday?: number | null; // 0=Sun..6=Sat
+  monthlyDayOfMonth?: number | null; // 1..31
+  /** Contract monthly exception (delta) rule for Sites (adds on top of regular plan). */
+  monthlyExceptionHoursDelta?: number | null;
+  monthlyExceptionMode?: "day_of_month" | "nth_weekday" | null;
+  monthlyExceptionWeekOfMonth?: "First" | "Second" | "Third" | "Fourth" | "Last" | null;
+  monthlyExceptionWeekday?: number | null; // 0=Sun..6=Sat
+  monthlyExceptionDayOfMonth?: number | null; // 1..31
   /** @deprecated Legacy SharePoint column; merged into weekday / weekend in UI. */
   budgetLabourRate?: number;
   weekendLabourRate?: number;
@@ -331,6 +342,15 @@ export function toAppSite(
   budgeted_hours_per_fortnight: number;
   daily_budgets: number[];
   daily_budgets_week2?: number[];
+  monthlyMode?: "day_of_month" | "nth_weekday" | null;
+  monthlyWeekOfMonth?: "First" | "Second" | "Third" | "Fourth" | "Last" | null;
+  monthlyWeekday?: number | null;
+  monthlyDayOfMonth?: number | null;
+  monthlyExceptionHoursDelta?: number | null;
+  monthlyExceptionMode?: "day_of_month" | "nth_weekday" | null;
+  monthlyExceptionWeekOfMonth?: "First" | "Second" | "Third" | "Fourth" | "Last" | null;
+  monthlyExceptionWeekday?: number | null;
+  monthlyExceptionDayOfMonth?: number | null;
   assigned_cleaner_ids: string[];
   financial_budget: number;
   cleaner_rates: Record<string, number>;
@@ -388,6 +408,31 @@ export function toAppSite(
     financial_budget: 0,
     cleaner_rates: {},
     ...(budget?.visitFrequency && { visit_frequency: budget.visitFrequency }),
+    ...(budget?.monthlyMode !== undefined ? { monthlyMode: budget.monthlyMode ?? null } : {}),
+    ...(budget?.monthlyWeekOfMonth !== undefined
+      ? { monthlyWeekOfMonth: budget.monthlyWeekOfMonth ?? null }
+      : {}),
+    ...(budget?.monthlyWeekday !== undefined
+      ? { monthlyWeekday: budget.monthlyWeekday ?? null }
+      : {}),
+    ...(budget?.monthlyDayOfMonth !== undefined
+      ? { monthlyDayOfMonth: budget.monthlyDayOfMonth ?? null }
+      : {}),
+    ...(budget?.monthlyExceptionHoursDelta !== undefined
+      ? { monthlyExceptionHoursDelta: budget.monthlyExceptionHoursDelta ?? null }
+      : {}),
+    ...(budget?.monthlyExceptionMode !== undefined
+      ? { monthlyExceptionMode: budget.monthlyExceptionMode ?? null }
+      : {}),
+    ...(budget?.monthlyExceptionWeekOfMonth !== undefined
+      ? { monthlyExceptionWeekOfMonth: budget.monthlyExceptionWeekOfMonth ?? null }
+      : {}),
+    ...(budget?.monthlyExceptionWeekday !== undefined
+      ? { monthlyExceptionWeekday: budget.monthlyExceptionWeekday ?? null }
+      : {}),
+    ...(budget?.monthlyExceptionDayOfMonth !== undefined
+      ? { monthlyExceptionDayOfMonth: budget.monthlyExceptionDayOfMonth ?? null }
+      : {}),
     /* Weekday Labour Rate (schema) → budget_labour_rate + budget_weekday_labour_rate; legacy Budget Labour Rate fallback */
     ...((budget?.weekdayLabourRate ?? budget?.budgetLabourRate) != null && { budget_labour_rate: budget.weekdayLabourRate ?? budget.budgetLabourRate ?? 0 }),
     ...(budget?.weekdayLabourRate != null && budget.weekdayLabourRate >= 0 && { budget_weekday_labour_rate: budget.weekdayLabourRate }),

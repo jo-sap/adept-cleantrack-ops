@@ -5,7 +5,7 @@ import { format, getDay, addDays } from 'date-fns';
 import { useRole } from '../contexts/RoleContext';
 import { useAppAuth } from '../contexts/AppAuthContext';
 import { getCleanTrackUserByEmail } from '../repositories/usersRepo';
-import { getDayStatus } from '../utils';
+import { getDayStatus, getFortnightForTimesheetCompletion, isFortnightLockedForView, nthWeekdayOfMonth } from '../utils';
 import { getSiteRateForDate, computeBudgetedLabourCostForRange } from '../lib/budgetedLabourCost';
 import { getPublicHolidaysInRange } from '../lib/publicHolidays';
 import { getNoServicePeriodForDate } from '../lib/noServicePeriods';
@@ -63,6 +63,17 @@ const TimeEntryForm: React.FC<TimeEntryFormProps> = ({
 }) => {
   const { isAdmin, isManager } = useRole();
   const { user: authUser } = useAppAuth();
+  // Helps prevent accidental “wrong fortnight” entry when the new cycle ticks over.
+  const now = useMemo(() => new Date(), []);
+  const completionDefaultPeriod = useMemo(
+    () => getFortnightForTimesheetCompletion(now),
+    [now]
+  );
+  const isOnDefaultCompletedFortnight = completionDefaultPeriod.id === currentPeriod.id;
+  const periodLocked = useMemo(
+    () => isFortnightLockedForView(now, currentPeriod.startDate, currentPeriod.endDate),
+    [now, currentPeriod.id]
+  );
   const [activeSiteId, setActiveSiteId] = useState<string | null>(null);
   const [selectedCleanerId, setSelectedCleanerId] = useState<string>('');
   const [draftHours, setDraftHours] = useState<Record<string, number>>({});
@@ -117,7 +128,7 @@ const TimeEntryForm: React.FC<TimeEntryFormProps> = ({
       managerNoteBody.trim() !== managerNoteSavedBody.trim(),
     [isAdmin, isManager, managerNoteBody, managerNoteSavedBody]
   );
-  const canSaveAnything = hasUnsavedChanges || managerNoteDirty;
+  const canSaveAnything = !periodLocked && (hasUnsavedChanges || managerNoteDirty);
 
   const filteredSites = useMemo(() => {
     const q = siteSearchQuery.trim().toLowerCase();
@@ -139,14 +150,68 @@ const TimeEntryForm: React.FC<TimeEntryFormProps> = ({
     (site: Site, dateIndex: number, date: Date): number => {
       if (getNoServicePeriodForDate(date, site.no_service_periods)) return 0;
       const visit = String(site.visit_frequency ?? "").trim().toLowerCase();
-      // Monthly/fortnightly "period cap" mode: no per-day plan (handled elsewhere)
-      if (visit === "monthly") return 0;
-      const week2 = (site as any).daily_budgets_week2 as number[] | undefined;
-      const budgets =
-        visit === "fortnightly" && week2 && week2.length >= 7 && dateIndex >= 7
-          ? week2
-          : site.daily_budgets;
-      return budgets?.[getDay(date)] ?? 0;
+      let baseHours = 0;
+      if (visit === "monthly") {
+        // Monthly recurrence mode: plan hours on specific monthly dates.
+        // If the rule isn't configured, keep the legacy behavior (period cap elsewhere).
+        if (site.monthlyMode) {
+          const hoursPerVisit = (site.budgeted_hours_per_fortnight ?? 0) * 2;
+          const year = date.getFullYear();
+          const monthIndex0 = date.getMonth();
+          if (!hoursPerVisit || hoursPerVisit <= 0) return 0;
+
+          if (site.monthlyMode === "day_of_month") {
+            const dom = site.monthlyDayOfMonth;
+            if (dom == null || dom <= 0) return 0;
+            const candidate = new Date(year, monthIndex0, dom);
+            if (candidate.getMonth() !== monthIndex0) return 0; // e.g. 31st in a 30-day month
+            if (candidate.getDate() === date.getDate()) baseHours = hoursPerVisit;
+          } else {
+            // nth_weekday
+            const which = site.monthlyWeekOfMonth;
+            const weekday = site.monthlyWeekday;
+            if (which && weekday != null) {
+              const occ = nthWeekdayOfMonth(year, monthIndex0, weekday, which);
+              if (occ && format(occ, "yyyy-MM-dd") === format(date, "yyyy-MM-dd")) baseHours = hoursPerVisit;
+            }
+          }
+        }
+        // Legacy: Monthly without recurrence rule → no per-day plan.
+      } else {
+        const week2 = (site as any).daily_budgets_week2 as number[] | undefined;
+        const budgets =
+          visit === "fortnightly" && week2 && week2.length >= 7 && dateIndex >= 7
+            ? week2
+            : site.daily_budgets;
+        baseHours = budgets?.[getDay(date)] ?? 0;
+      }
+
+      // Monthly exception (delta): add extra planned hours on a specific monthly occurrence date.
+      const excDelta = site.monthlyExceptionHoursDelta ?? 0;
+      if (excDelta > 0 && site.monthlyExceptionMode) {
+        const year = date.getFullYear();
+        const monthIndex0 = date.getMonth();
+        if (site.monthlyExceptionMode === "day_of_month") {
+          const dom = site.monthlyExceptionDayOfMonth;
+          if (dom != null && dom > 0) {
+            const candidate = new Date(year, monthIndex0, dom);
+            if (candidate.getMonth() === monthIndex0 && candidate.getDate() === date.getDate()) {
+              baseHours += excDelta;
+            }
+          }
+        } else {
+          const which = site.monthlyExceptionWeekOfMonth;
+          const weekday = site.monthlyExceptionWeekday;
+          if (which && weekday != null) {
+            const occ = nthWeekdayOfMonth(year, monthIndex0, weekday, which);
+            if (occ && format(occ, "yyyy-MM-dd") === format(date, "yyyy-MM-dd")) {
+              baseHours += excDelta;
+            }
+          }
+        }
+      }
+
+      return baseHours;
     },
     []
   );
@@ -168,7 +233,9 @@ const TimeEntryForm: React.FC<TimeEntryFormProps> = ({
         (s, d, idx) => s + getPlannedHoursForDate(site, idx, d),
         0
       );
-      const usePeriodCap = isPeriodBudget && periodCap > 0 && dailyPlanSum === 0;
+      const hasMonthlyRecurrence = site.visit_frequency === "Monthly" && !!site.monthlyMode;
+      const usePeriodCap =
+        isPeriodBudget && periodCap > 0 && dailyPlanSum === 0 && !hasMonthlyRecurrence;
       const budgetTotal = usePeriodCap ? periodCap : dailyPlanSum;
       let actualTotal = 0;
       entries.forEach((e) => {
@@ -273,10 +340,20 @@ const TimeEntryForm: React.FC<TimeEntryFormProps> = ({
       const sundayRate = site.budget_sunday_labour_rate ?? weekdayRate;
       const phRate = site.budget_ph_labour_rate ?? weekdayRate;
       const visit = String(site.visit_frequency ?? "").trim().toLowerCase();
-      // For Fortnightly schedules with Week 2 budgets, compute expected cost per date so week2 is respected.
-      // Otherwise keep the existing 7-day budget calculation.
       let cost = 0;
-      if (visit === "fortnightly" && (site as any).daily_budgets_week2) {
+
+      const hasMonthlyException =
+        (site.monthlyExceptionHoursDelta ?? 0) > 0 &&
+        !!site.monthlyExceptionMode &&
+        ((site.monthlyExceptionMode === "day_of_month" &&
+          site.monthlyExceptionDayOfMonth != null) ||
+          (site.monthlyExceptionMode === "nth_weekday" &&
+            site.monthlyExceptionWeekday != null &&
+            site.monthlyExceptionWeekOfMonth != null));
+
+      // When an exception is configured, compute cost using the same per-date planned hours
+      // (so budget/variance stay consistent with the grid).
+      if (hasMonthlyException || (visit === "fortnightly" && (site as any).daily_budgets_week2)) {
         dates.forEach((d, idx) => {
           const planned = getPlannedHoursForDate(site, idx, d);
           if (planned <= 0) return;
@@ -284,9 +361,8 @@ const TimeEntryForm: React.FC<TimeEntryFormProps> = ({
           cost += planned * rate;
         });
       } else {
-        const dailyBudgets = (site.daily_budgets?.length ?? 0) >= 7
-          ? site.daily_budgets
-          : [0, 0, 0, 0, 0, 0, 0];
+        const dailyBudgets =
+          (site.daily_budgets?.length ?? 0) >= 7 ? site.daily_budgets : [0, 0, 0, 0, 0, 0, 0];
         cost = computeBudgetedLabourCostForRange({
           startDate: currentPeriod.startDate,
           endDate: currentPeriod.endDate,
@@ -597,7 +673,9 @@ const TimeEntryForm: React.FC<TimeEntryFormProps> = ({
       (s, d, idx) => s + getPlannedHoursForDate(activeSite, idx, d),
       0
     );
-    const usePeriodCap = isPeriodBudget && periodCap > 0 && dailyPlanSum === 0;
+    const hasMonthlyRecurrence = activeSite.visit_frequency === "Monthly" && !!activeSite.monthlyMode;
+    const usePeriodCap =
+      isPeriodBudget && periodCap > 0 && dailyPlanSum === 0 && !hasMonthlyRecurrence;
 
     const exceeds = (actual: number, plan: number) =>
       Math.round(actual * 100) > Math.round(plan * 100);
@@ -662,6 +740,10 @@ const TimeEntryForm: React.FC<TimeEntryFormProps> = ({
 
   const handleSave = async () => {
     if (!activeSiteId || !selectedCleanerId || !activeCleaner || !activeSite) return;
+    if (periodLocked) {
+      alert(`This fortnight unlocks on ${format(addDays(currentPeriod.startDate, 7), 'dd/MM')}.`);
+      return;
+    }
     if (!hasUnsavedChanges && !managerNoteDirty) return;
     if (adhocJobId && managerNoteBody.trim() === "") {
       alert("Manager Notes are required for Ad Hoc timesheets.");
@@ -765,8 +847,9 @@ const TimeEntryForm: React.FC<TimeEntryFormProps> = ({
     }
     const isPeriodBudget = activeSite.visit_frequency === "Monthly" || activeSite.visit_frequency === "Fortnightly";
     const periodCap = activeSite.budgeted_hours_per_fortnight ?? 0;
-    const dailySum = dates.reduce((s, d) => s + (activeSite.daily_budgets[getDay(d)] || 0), 0);
-    const usePeriodCap = isPeriodBudget && periodCap > 0 && dailySum === 0;
+    const dailyPlanSum = dates.reduce((s, d, idx) => s + getPlannedHoursForDate(activeSite, idx, d), 0);
+    const hasMonthlyRecurrence = activeSite.visit_frequency === "Monthly" && !!activeSite.monthlyMode;
+    const usePeriodCap = isPeriodBudget && periodCap > 0 && dailyPlanSum === 0 && !hasMonthlyRecurrence;
 
     const next: Record<string, number> = { ...draftHours };
     let changed = false;
@@ -903,7 +986,9 @@ const TimeEntryForm: React.FC<TimeEntryFormProps> = ({
       (s, d, idx) => s + getPlannedHoursForDate(activeSite, idx, d),
       0
     );
-    const usePeriodCap = isPeriodBudget && periodCap > 0 && dailyPlanSum === 0;
+    const hasMonthlyRecurrence = activeSite.visit_frequency === "Monthly" && !!activeSite.monthlyMode;
+    const usePeriodCap =
+      isPeriodBudget && periodCap > 0 && dailyPlanSum === 0 && !hasMonthlyRecurrence;
     const budgetTotal = usePeriodCap
       ? periodCap
       : dates.reduce((s, date, idx) => s + getPlannedHoursForDate(activeSite, idx, date), 0);
@@ -1096,7 +1181,8 @@ const TimeEntryForm: React.FC<TimeEntryFormProps> = ({
                   <button
                     type="button"
                     onClick={handleAutoFill}
-                    className="flex flex-col items-center justify-center w-full sm:w-24 h-12 sm:h-14 rounded-xl border border-[#edeef0] bg-white text-gray-700 hover:bg-gray-50 hover:border-gray-300 transition-all"
+                    disabled={periodLocked}
+                    className="flex flex-col items-center justify-center w-full sm:w-24 h-12 sm:h-14 rounded-xl border border-[#edeef0] bg-white text-gray-700 hover:bg-gray-50 hover:border-gray-300 transition-all disabled:opacity-40 disabled:cursor-not-allowed"
                     title="Fill empty days with remaining plan hours"
                   >
                     <Zap size={12} className="opacity-70 mb-0.5" /><span className="text-[10px] font-bold uppercase">Auto fill</span>
@@ -1119,7 +1205,8 @@ const TimeEntryForm: React.FC<TimeEntryFormProps> = ({
                         setHasUnsavedChanges(true);
                       }
                     }}
-                    className="flex flex-col items-center justify-center w-full sm:w-24 h-12 sm:h-14 rounded-xl border border-[#edeef0] bg-white text-gray-700 hover:bg-gray-50 hover:border-gray-300 transition-all"
+                    disabled={periodLocked}
+                    className="flex flex-col items-center justify-center w-full sm:w-24 h-12 sm:h-14 rounded-xl border border-[#edeef0] bg-white text-gray-700 hover:bg-gray-50 hover:border-gray-300 transition-all disabled:opacity-40 disabled:cursor-not-allowed"
                     title="Fill empty days with scheduled hours"
                   >
                     <Zap size={12} className="opacity-70 mb-0.5" /><span className="text-[10px] font-bold uppercase">Fill</span>
@@ -1128,7 +1215,7 @@ const TimeEntryForm: React.FC<TimeEntryFormProps> = ({
                 <button
                   type="button"
                   onClick={handleCopyPreviousFortnight}
-                  disabled={saveLoading}
+                  disabled={periodLocked || saveLoading}
                   className="flex flex-col items-center justify-center w-full sm:w-24 h-12 sm:h-14 rounded-xl border border-[#edeef0] bg-white text-gray-700 hover:bg-gray-50 hover:border-gray-300 transition-all disabled:opacity-40"
                   title="Copy saved hours from the previous pay fortnight for this site and cleaner (same job type). Save to persist."
                 >
@@ -1140,7 +1227,7 @@ const TimeEntryForm: React.FC<TimeEntryFormProps> = ({
                 <button
                   type="button"
                   onClick={handleClearAll}
-                  disabled={saveLoading}
+                  disabled={periodLocked || saveLoading}
                   className="flex flex-col items-center justify-center w-full sm:w-24 h-12 sm:h-14 rounded-xl border border-[#edeef0] bg-white text-gray-700 hover:bg-gray-50 hover:border-gray-300 transition-all disabled:opacity-40"
                   title="Clear all hours for this fortnight (not saved until Save)"
                 >
@@ -1209,7 +1296,7 @@ const TimeEntryForm: React.FC<TimeEntryFormProps> = ({
                         value={draftHours[dateStr] || ''}
                         onChange={e => handleHourChange(dateStr, e.target.value)}
                         className="w-full px-2.5 py-2 text-center text-sm font-semibold bg-white border border-gray-300 rounded-lg focus:ring-2 focus:ring-gray-900/15 focus:border-gray-900 shadow-[inset_0_0_0_1px_rgba(15,23,42,0.02)] placeholder-gray-400 disabled:opacity-40 disabled:cursor-not-allowed"
-                        disabled={fullyAllocatedToOthers}
+                        disabled={periodLocked || fullyAllocatedToOthers}
                       />
                       {noServicePeriod && (
                         <div className="text-center text-[8px] font-bold uppercase text-gray-500">
@@ -1225,7 +1312,7 @@ const TimeEntryForm: React.FC<TimeEntryFormProps> = ({
             {(isAdmin || isManager) && (
               <TimesheetPeriodNotesPanel
                 currentPeriod={currentPeriod}
-                canEdit={isAdmin || isManager}
+                canEdit={(isAdmin || isManager) && !periodLocked}
                 noteBody={managerNoteBody}
                 onNoteChange={setManagerNoteBody}
                 notesLoading={notesListLoading}
@@ -1241,6 +1328,28 @@ const TimeEntryForm: React.FC<TimeEntryFormProps> = ({
 
   return (
     <div className="space-y-6 sm:space-y-8">
+      <div className="flex flex-wrap items-center gap-2">
+        <span className="text-[11px] font-bold text-gray-500 uppercase tracking-widest">
+          Fortnight
+        </span>
+        <span className="px-3 py-1 rounded-full bg-[#ECF3F4] text-[#3E5F6A] text-[12px] font-semibold">
+          {format(currentPeriod.startDate, 'MMM d')} — {format(currentPeriod.endDate, 'MMM d')}
+        </span>
+        {isOnDefaultCompletedFortnight ? (
+          <span className="px-2 py-1 rounded-lg text-[11px] font-semibold bg-emerald-50 border border-emerald-200 text-emerald-800">
+            Default: completed fortnight
+          </span>
+        ) : (
+          <span className="px-2 py-1 rounded-lg text-[11px] font-semibold bg-gray-50 border border-gray-200 text-gray-700">
+            Selected fortnight
+          </span>
+        )}
+      </div>
+      {periodLocked && (
+        <div className="text-[11px] text-amber-900 bg-amber-50 border border-amber-200 rounded-lg px-4 py-2">
+          This fortnight is locked until {format(addDays(currentPeriod.startDate, 7), 'dd/MM')}.
+        </div>
+      )}
       <div className="flex flex-col sm:flex-row sm:justify-between sm:items-center gap-4">
         <div className="min-w-0">
           <p className="text-[13px] text-gray-500">
@@ -1250,6 +1359,7 @@ const TimeEntryForm: React.FC<TimeEntryFormProps> = ({
         <div className="flex gap-2 flex-shrink-0">
           <button
             type="button"
+            disabled={periodLocked}
             onClick={async () => {
               try {
                 const periodYmd = format(currentPeriod.startDate, 'yyyy-MM-dd');
@@ -1283,7 +1393,7 @@ const TimeEntryForm: React.FC<TimeEntryFormProps> = ({
                 alert(e instanceof Error ? e.message : 'Export failed. Check the browser console.');
               }
             }}
-            className="flex items-center gap-1.5 px-4 py-2 so-btn-secondary text-xs font-semibold"
+            className="flex items-center gap-1.5 px-4 py-2 so-btn-secondary text-xs font-semibold disabled:opacity-40 disabled:cursor-not-allowed"
           >
             <FileSpreadsheet size={14} />
             Export (XLSX)

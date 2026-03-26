@@ -19,7 +19,13 @@ import {
 import { getSchoolHolidayPeriods, getSupportedSchoolHolidayYears } from "../lib/schoolHolidays";
 import { getAssignedSiteIdsForManager, createSiteManagerAssignment, getAssignedManagersForSite, deleteSiteManagerAssignment, fetchSiteManagerAssignments, joinAssignmentsToSites } from "../repositories/siteManagersRepo";
 import { getCleanTrackManagers } from "../repositories/usersRepo";
-import { createSiteBudget, getSiteBudgets, updateSiteBudget, type SiteBudgetHours } from "../repositories/budgetsRepo";
+import {
+  createSiteBudget,
+  getMissingMonthlyExceptionBudgetColumns,
+  getSiteBudgets,
+  updateSiteBudget,
+  type SiteBudgetHours,
+} from "../repositories/budgetsRepo";
 import { getSiteCleanerAssignments } from "../repositories/assignedCleanersRepo";
 import { normalizeListItemId } from "../lib/sharepoint";
 import { AU_STATES } from "../lib/auStates";
@@ -30,6 +36,25 @@ type DayKey = (typeof DAY_LABELS)[number];
 const DAY_KEYS: DayKey[] = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
 
 type VisitFreq = "Weekly" | "Fortnightly" | "Monthly";
+
+type MonthlyMode = "day_of_month" | "nth_weekday";
+
+const MONTHLY_MODE_OPTIONS = [
+  { id: "day_of_month", label: "Day of Month" },
+  { id: "nth_weekday", label: "Nth Weekday" },
+] as const;
+
+const WEEK_OF_MONTH_OPTIONS = ["First", "Second", "Third", "Fourth", "Last"] as const;
+
+const MONTHLY_WEEKDAY_OPTIONS = [
+  { id: 1, label: "Mon" },
+  { id: 2, label: "Tue" },
+  { id: 3, label: "Wed" },
+  { id: 4, label: "Thu" },
+  { id: 5, label: "Fri" },
+  { id: 6, label: "Sat" },
+  { id: 0, label: "Sun" },
+] as const;
 
 /** Empty = not set in UI / SharePoint; saved `0` stays numeric `0`. */
 type DayHourField = number | "";
@@ -291,6 +316,19 @@ const SiteManager: React.FC<SiteManagerProps> = ({ onUpdateSite, onViewSite, ref
   const [selectedManagerIds, setSelectedManagerIds] = useState<string[]>([]);
   const [visitFrequency, setVisitFrequency] = useState<VisitFreq>("Weekly");
   const [hoursPerVisit, setHoursPerVisit] = useState<number | "">("");
+  const [monthlyMode, setMonthlyMode] = useState<MonthlyMode | "">("");
+  const [monthlyWeekOfMonth, setMonthlyWeekOfMonth] = useState<SiteBudgetHours["monthlyWeekOfMonth"]>(null);
+  const [monthlyWeekday, setMonthlyWeekday] = useState<number | null>(null);
+  const [monthlyDayOfMonth, setMonthlyDayOfMonth] = useState<number | null>(null);
+
+  // Monthly exception (delta): adds extra planned hours on top of the site's normal weekly plan.
+  const [monthlyExceptionEnabled, setMonthlyExceptionEnabled] = useState(false);
+  const [monthlyExceptionMode, setMonthlyExceptionMode] = useState<MonthlyMode | "">("");
+  const [monthlyExceptionWeekOfMonth, setMonthlyExceptionWeekOfMonth] = useState<SiteBudgetHours["monthlyWeekOfMonth"]>(null);
+  const [monthlyExceptionWeekday, setMonthlyExceptionWeekday] = useState<number | null>(null);
+  const [monthlyExceptionDayOfMonth, setMonthlyExceptionDayOfMonth] = useState<number | null>(null);
+  const [monthlyExceptionHoursDelta, setMonthlyExceptionHoursDelta] = useState<number | "">("");
+
   const [weekdayLabourRate, setWeekdayLabourRate] = useState<number | "">("");
   const [saturdayLabourRate, setSaturdayLabourRate] = useState<number | "">("");
   const [sundayLabourRate, setSundayLabourRate] = useState<number | "">("");
@@ -583,6 +621,16 @@ const SiteManager: React.FC<SiteManagerProps> = ({ onUpdateSite, onViewSite, ref
     setFortnightCostBudget("");
     setVisitFrequency("Weekly");
     setHoursPerVisit("");
+    setMonthlyMode("");
+    setMonthlyWeekOfMonth(null);
+    setMonthlyWeekday(null);
+    setMonthlyDayOfMonth(null);
+    setMonthlyExceptionEnabled(false);
+    setMonthlyExceptionMode("");
+    setMonthlyExceptionWeekOfMonth(null);
+    setMonthlyExceptionWeekday(null);
+    setMonthlyExceptionDayOfMonth(null);
+    setMonthlyExceptionHoursDelta("");
     setWeekdayLabourRate("");
     setSaturdayLabourRate("");
     setSundayLabourRate("");
@@ -646,6 +694,19 @@ const SiteManager: React.FC<SiteManagerProps> = ({ onUpdateSite, onViewSite, ref
     setHoursPerVisit(
       budget?.hoursPerVisit != null && budget.hoursPerVisit > 0 ? budget.hoursPerVisit : ""
     );
+    setMonthlyMode(budget?.monthlyMode ? budget.monthlyMode : "");
+    setMonthlyWeekOfMonth(budget?.monthlyWeekOfMonth ?? null);
+    setMonthlyWeekday(budget?.monthlyWeekday ?? null);
+    setMonthlyDayOfMonth(budget?.monthlyDayOfMonth ?? null);
+    const excDelta = budget?.monthlyExceptionHoursDelta;
+    setMonthlyExceptionEnabled(excDelta != null && excDelta > 0);
+    setMonthlyExceptionHoursDelta(
+      excDelta != null && excDelta > 0 ? excDelta : ""
+    );
+    setMonthlyExceptionMode(budget?.monthlyExceptionMode ? (budget.monthlyExceptionMode as any) : "");
+    setMonthlyExceptionWeekOfMonth(budget?.monthlyExceptionWeekOfMonth ?? null);
+    setMonthlyExceptionWeekday(budget?.monthlyExceptionWeekday ?? null);
+    setMonthlyExceptionDayOfMonth(budget?.monthlyExceptionDayOfMonth ?? null);
     setWeekdayLabourRate(
       budget?.weekdayLabourRate != null && budget.weekdayLabourRate >= 0
         ? budget.weekdayLabourRate
@@ -860,6 +921,8 @@ const SiteManager: React.FC<SiteManagerProps> = ({ onUpdateSite, onViewSite, ref
         const siteId = created.id;
         const isMonthly = visitFrequency === "Monthly";
         const isFortnightly = visitFrequency === "Fortnightly";
+        const exceptionDeltaNum =
+          monthlyExceptionHoursDelta === "" ? 0 : Number(monthlyExceptionHoursDelta) || 0;
         try {
           await createSiteBudget(token, {
             budgetName: `${form.siteName.trim()} Budget`,
@@ -874,6 +937,19 @@ const SiteManager: React.FC<SiteManagerProps> = ({ onUpdateSite, onViewSite, ref
             active: true,
             visitFrequency,
             ...(isMonthly && hoursPerVisit !== "" && { hoursPerVisit: Number(hoursPerVisit) }),
+            ...(isMonthly && monthlyMode !== "" && {
+              monthlyMode: monthlyMode as any,
+              monthlyWeekOfMonth,
+              monthlyWeekday,
+              monthlyDayOfMonth,
+            }),
+            monthlyExceptionHoursDelta: monthlyExceptionEnabled ? exceptionDeltaNum : 0,
+            ...(monthlyExceptionEnabled && monthlyExceptionMode !== "" && {
+              monthlyExceptionMode: monthlyExceptionMode as any,
+              monthlyExceptionWeekOfMonth,
+              monthlyExceptionWeekday,
+              monthlyExceptionDayOfMonth,
+            }),
             ...(isFortnightly && {
               week2SundayHours: dayHourToNum(dailyHoursWeek2.Sun),
               week2MondayHours: dayHourToNum(dailyHoursWeek2.Mon),
@@ -891,6 +967,20 @@ const SiteManager: React.FC<SiteManagerProps> = ({ onUpdateSite, onViewSite, ref
         } catch (budgetErr) {
           console.warn("Site budget create failed (site was created):", budgetErr);
         }
+        let monthlyExcColsMissingAdd: string[] = [];
+        if (monthlyExceptionEnabled) {
+          try {
+            const modeArg =
+              monthlyExceptionMode === "day_of_month"
+                ? "day_of_month"
+                : monthlyExceptionMode === "nth_weekday"
+                  ? "nth_weekday"
+                  : "";
+            monthlyExcColsMissingAdd = await getMissingMonthlyExceptionBudgetColumns(token, modeArg as any);
+          } catch {
+            /* ignore */
+          }
+        }
         for (const managerId of selectedManagerIds) {
           try {
             const managerFullName = managers.find((m) => m.id === managerId)?.fullName ?? "";
@@ -902,7 +992,13 @@ const SiteManager: React.FC<SiteManagerProps> = ({ onUpdateSite, onViewSite, ref
             console.warn("Manager assignment failed for", managerId, assignErr);
           }
         }
-        showToast("Site added.");
+        if (monthlyExcColsMissingAdd.length > 0) {
+          showToast(
+            `Site added, but SharePoint list "CleanTrack Site Budgets" is missing column(s): ${monthlyExcColsMissingAdd.join(", ")}. Create those columns (exact display names) or monthly exception settings cannot be saved.`
+          );
+        } else {
+          showToast("Site added.");
+        }
       } else if (modalMode === "edit" && editingSite) {
         await updateSite(token, editingSite.id, {
           siteName: form.siteName.trim(),
@@ -915,6 +1011,8 @@ const SiteManager: React.FC<SiteManagerProps> = ({ onUpdateSite, onViewSite, ref
         const budget = budgetsBySiteId[String(editingSite.id)] ?? budgetsBySiteId["name:" + (editingSite.siteName.trim() + " Budget")];
         const isMonthly = visitFrequency === "Monthly";
         const isFortnightly = visitFrequency === "Fortnightly";
+        const exceptionDeltaNum =
+          monthlyExceptionHoursDelta === "" ? 0 : Number(monthlyExceptionHoursDelta) || 0;
         const budgetPayload = {
           sundayHours: isMonthly ? 0 : dayHourToNum(dailyHours.Sun),
           mondayHours: isMonthly ? 0 : dayHourToNum(dailyHours.Mon),
@@ -927,6 +1025,19 @@ const SiteManager: React.FC<SiteManagerProps> = ({ onUpdateSite, onViewSite, ref
           siteListItemId: editingSite.id,
           visitFrequency,
           hoursPerVisit: isMonthly && hoursPerVisit !== "" ? Number(hoursPerVisit) : (isFortnightly || visitFrequency === "Weekly" ? 0 : undefined),
+          ...(isMonthly && monthlyMode !== "" && {
+            monthlyMode: monthlyMode as any,
+            monthlyWeekOfMonth,
+            monthlyWeekday,
+            monthlyDayOfMonth,
+          }),
+          monthlyExceptionHoursDelta: monthlyExceptionEnabled ? exceptionDeltaNum : 0,
+          ...(monthlyExceptionEnabled && monthlyExceptionMode !== "" && {
+            monthlyExceptionMode: monthlyExceptionMode as any,
+            monthlyExceptionWeekOfMonth,
+            monthlyExceptionWeekday,
+            monthlyExceptionDayOfMonth,
+          }),
           week2SundayHours: isFortnightly ? dayHourToNum(dailyHoursWeek2.Sun) : 0,
           week2MondayHours: isFortnightly ? dayHourToNum(dailyHoursWeek2.Mon) : 0,
           week2TuesdayHours: isFortnightly ? dayHourToNum(dailyHoursWeek2.Tue) : 0,
@@ -956,6 +1067,20 @@ const SiteManager: React.FC<SiteManagerProps> = ({ onUpdateSite, onViewSite, ref
             active: budgetPayload.active,
             visitFrequency: budgetPayload.visitFrequency,
             ...(budgetPayload.hoursPerVisit !== undefined && { hoursPerVisit: budgetPayload.hoursPerVisit }),
+            ...(budgetPayload.monthlyMode !== undefined &&
+              budgetPayload.monthlyMode !== "" && {
+                monthlyMode: budgetPayload.monthlyMode as any,
+                monthlyWeekOfMonth: budgetPayload.monthlyWeekOfMonth,
+                monthlyWeekday: budgetPayload.monthlyWeekday,
+                monthlyDayOfMonth: budgetPayload.monthlyDayOfMonth,
+              }),
+            monthlyExceptionHoursDelta: budgetPayload.monthlyExceptionHoursDelta,
+            ...(budgetPayload.monthlyExceptionMode !== undefined && budgetPayload.monthlyExceptionMode !== "" && {
+              monthlyExceptionMode: budgetPayload.monthlyExceptionMode as any,
+              monthlyExceptionWeekOfMonth: budgetPayload.monthlyExceptionWeekOfMonth,
+              monthlyExceptionWeekday: budgetPayload.monthlyExceptionWeekday,
+              monthlyExceptionDayOfMonth: budgetPayload.monthlyExceptionDayOfMonth,
+            }),
             week2SundayHours: budgetPayload.week2SundayHours,
             week2MondayHours: budgetPayload.week2MondayHours,
             week2TuesdayHours: budgetPayload.week2TuesdayHours,
@@ -969,6 +1094,20 @@ const SiteManager: React.FC<SiteManagerProps> = ({ onUpdateSite, onViewSite, ref
             ...(budgetPayload.sundayLabourRate !== undefined && { sundayLabourRate: budgetPayload.sundayLabourRate }),
             ...(budgetPayload.phLabourRate !== undefined && { phLabourRate: budgetPayload.phLabourRate }),
           });
+        }
+        let monthlyExcColsMissingEdit: string[] = [];
+        if (monthlyExceptionEnabled) {
+          try {
+            const modeArg =
+              monthlyExceptionMode === "day_of_month"
+                ? "day_of_month"
+                : monthlyExceptionMode === "nth_weekday"
+                  ? "nth_weekday"
+                  : "";
+            monthlyExcColsMissingEdit = await getMissingMonthlyExceptionBudgetColumns(token, modeArg as any);
+          } catch {
+            /* ignore */
+          }
         }
         const currentAssignments = await getAssignedManagersForSite(token, editingSite.id);
         const currentIds = new Set(currentAssignments.map((a) => a.managerId));
@@ -1000,6 +1139,10 @@ const SiteManager: React.FC<SiteManagerProps> = ({ onUpdateSite, onViewSite, ref
         }
         if (managerErrors.length > 0) {
           showToast(`Site updated but manager assignment failed: ${managerErrors.join("; ")}`);
+        } else if (monthlyExcColsMissingEdit.length > 0) {
+          showToast(
+            `Site updated, but SharePoint list "CleanTrack Site Budgets" is missing column(s): ${monthlyExcColsMissingEdit.join(", ")}. Create those columns (exact display names) or monthly exception settings cannot be saved.`
+          );
         } else {
           showToast("Site updated.");
         }
@@ -1675,6 +1818,12 @@ const SiteManager: React.FC<SiteManagerProps> = ({ onUpdateSite, onViewSite, ref
                         if (next === "Fortnightly") {
                           if (sumDayHours(dailyHoursWeek2) === 0) setDailyHoursWeek2({ ...dailyHours });
                         }
+                        if (next !== "Monthly") {
+                          setMonthlyMode("");
+                          setMonthlyWeekOfMonth(null);
+                          setMonthlyWeekday(null);
+                          setMonthlyDayOfMonth(null);
+                        }
                       }}
                       options={[
                         { value: "Weekly", label: "Weekly" },
@@ -1682,6 +1831,125 @@ const SiteManager: React.FC<SiteManagerProps> = ({ onUpdateSite, onViewSite, ref
                         { value: "Monthly", label: "Monthly" },
                       ]}
                     />
+                  </div>
+                  <div className="rounded-lg border border-[#edeef0] p-3 sm:p-4 bg-white">
+                    <h4 className="text-xs font-bold text-gray-500 uppercase tracking-widest mb-3">Monthly exception (delta)</h4>
+                    <div className="flex items-center gap-2 mb-3">
+                      <input
+                        type="checkbox"
+                        id="monthlyExceptionEnabled"
+                        checked={monthlyExceptionEnabled}
+                        onChange={(e) => {
+                          const enabled = e.target.checked;
+                          setMonthlyExceptionEnabled(enabled);
+                          if (enabled) {
+                            setMonthlyExceptionHoursDelta((prev) => (prev === "" ? 2 : prev));
+                          } else {
+                            setMonthlyExceptionHoursDelta("");
+                            setMonthlyExceptionMode("");
+                            setMonthlyExceptionWeekOfMonth(null);
+                            setMonthlyExceptionWeekday(null);
+                            setMonthlyExceptionDayOfMonth(null);
+                          }
+                        }}
+                        className="rounded border-gray-300"
+                      />
+                      <label htmlFor="monthlyExceptionEnabled" className="text-sm text-gray-700">
+                        Add extra hours on 1 monthly occurrence
+                      </label>
+                    </div>
+
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                      <div>
+                        <label className="block text-xs font-bold text-gray-500 uppercase tracking-widest mb-1">
+                          Hours delta
+                        </label>
+                        <input
+                          type="number"
+                          min={0}
+                          step={0.5}
+                          value={monthlyExceptionHoursDelta}
+                          disabled={!monthlyExceptionEnabled}
+                          onChange={(e) => {
+                            const v = e.target.value;
+                            setMonthlyExceptionHoursDelta(v === "" ? "" : parseFloat(v) || 0);
+                          }}
+                          className="w-full border border-[#edeef0] rounded-lg px-3 py-2 text-sm disabled:bg-[#f7f7f7]"
+                          placeholder="e.g. 2"
+                        />
+                      </div>
+                      <div>
+                        <AppSelect
+                          label="Exception mode"
+                          value={monthlyExceptionMode}
+                          disabled={!monthlyExceptionEnabled}
+                          onChange={(v) => {
+                            const next = (v as MonthlyMode) || "";
+                            setMonthlyExceptionMode(next);
+                            if (next !== "nth_weekday") {
+                              setMonthlyExceptionWeekOfMonth(null);
+                              setMonthlyExceptionWeekday(null);
+                            }
+                            if (next !== "day_of_month") {
+                              setMonthlyExceptionDayOfMonth(null);
+                            }
+                          }}
+                          options={[
+                            { value: "", label: "Select…" },
+                            ...MONTHLY_MODE_OPTIONS.map((opt) => ({ value: opt.id, label: opt.label })),
+                          ]}
+                          placeholder="Select…"
+                        />
+                      </div>
+                    </div>
+
+                    {monthlyExceptionEnabled && monthlyExceptionMode === "nth_weekday" && (
+                      <div className="mt-3 grid grid-cols-1 sm:grid-cols-2 gap-3">
+                        <AppSelect
+                          label="Week of month"
+                          value={monthlyExceptionWeekOfMonth ?? ""}
+                          onChange={(v) => setMonthlyExceptionWeekOfMonth((v as any) || null)}
+                          options={[...WEEK_OF_MONTH_OPTIONS.map((opt) => ({ value: opt, label: opt }))]}
+                          placeholder="Select…"
+                        />
+                        <AppSelect
+                          label="Weekday"
+                          value={monthlyExceptionWeekday != null ? String(monthlyExceptionWeekday) : ""}
+                          onChange={(v) => setMonthlyExceptionWeekday(v === "" ? null : parseInt(v, 10))}
+                          options={MONTHLY_WEEKDAY_OPTIONS.map((opt) => ({
+                            value: String(opt.id),
+                            label: opt.label,
+                          }))}
+                          placeholder="Select…"
+                        />
+                      </div>
+                    )}
+
+                    {monthlyExceptionEnabled && monthlyExceptionMode === "day_of_month" && (
+                      <div className="mt-3">
+                        <label className="block text-xs font-bold text-gray-500 uppercase tracking-widest mb-1">
+                          Day of month
+                        </label>
+                        <input
+                          type="number"
+                          min={1}
+                          max={31}
+                          step={1}
+                          value={monthlyExceptionDayOfMonth ?? ""}
+                          disabled={!monthlyExceptionEnabled}
+                          onChange={(e) => {
+                            const v = e.target.value;
+                            setMonthlyExceptionDayOfMonth(v === "" ? null : parseInt(v, 10) || 1);
+                          }}
+                          className="w-full border border-[#edeef0] rounded-lg px-3 py-2 text-sm disabled:bg-[#f7f7f7]"
+                          placeholder="e.g. 15"
+                        />
+                      </div>
+                    )}
+
+                    <p className="text-[10px] text-gray-400 mt-3">
+                      Adds on top of your normal contract schedule (e.g. +2 on the 3rd Thursday).
+                    </p>
                   </div>
                   {visitFrequency === "Monthly" && (
                     <div>
@@ -1700,6 +1968,74 @@ const SiteManager: React.FC<SiteManagerProps> = ({ onUpdateSite, onViewSite, ref
                         className="w-full border border-[#edeef0] rounded-lg px-3 py-2 text-sm"
                         placeholder="e.g. 5"
                       />
+                      <div className="mt-3">
+                        <AppSelect
+                          label="Monthly mode"
+                          value={monthlyMode}
+                          onChange={(v) => {
+                            setMonthlyMode((v as MonthlyMode) || "");
+                            if (v !== "nth_weekday") {
+                              setMonthlyWeekOfMonth(null);
+                              setMonthlyWeekday(null);
+                            }
+                            if (v !== "day_of_month") {
+                              setMonthlyDayOfMonth(null);
+                            }
+                          }}
+                          options={[
+                            { value: "", label: "Select…" },
+                            ...MONTHLY_MODE_OPTIONS.map((opt) => ({ value: opt.id, label: opt.label })),
+                          ]}
+                          placeholder="Select…"
+                        />
+                      </div>
+
+                      {monthlyMode === "nth_weekday" && (
+                        <div className="mt-3 grid grid-cols-1 sm:grid-cols-2 gap-3">
+                          <AppSelect
+                            label="Week of month"
+                            value={monthlyWeekOfMonth ?? ""}
+                            onChange={(v) => setMonthlyWeekOfMonth((v as any) || null)}
+                            options={[
+                              ...WEEK_OF_MONTH_OPTIONS.map((opt) => ({ value: opt, label: opt })),
+                            ]}
+                            placeholder="Select…"
+                          />
+                          <AppSelect
+                            label="Weekday"
+                            value={monthlyWeekday != null ? String(monthlyWeekday) : ""}
+                            onChange={(v) =>
+                              setMonthlyWeekday(v === "" ? null : parseInt(v, 10))
+                            }
+                            options={MONTHLY_WEEKDAY_OPTIONS.map((opt) => ({
+                              value: String(opt.id),
+                              label: opt.label,
+                            }))}
+                            placeholder="Select…"
+                          />
+                        </div>
+                      )}
+
+                      {monthlyMode === "day_of_month" && (
+                        <div className="mt-3">
+                          <label className="block text-xs font-bold text-gray-500 uppercase tracking-widest mb-1">
+                            Day of month
+                          </label>
+                          <input
+                            type="number"
+                            min={1}
+                            max={31}
+                            step={1}
+                            value={monthlyDayOfMonth ?? ""}
+                            onChange={(e) => {
+                              const v = e.target.value;
+                              setMonthlyDayOfMonth(v === "" ? null : parseInt(v, 10) || 1);
+                            }}
+                            className="w-full border border-[#edeef0] rounded-lg px-3 py-2 text-sm"
+                            placeholder="e.g. 15"
+                          />
+                        </div>
+                      )}
                     </div>
                   )}
                   <h4 className="text-xs font-bold text-gray-500 uppercase tracking-widest mb-2">Labour rates ($/hr)</h4>

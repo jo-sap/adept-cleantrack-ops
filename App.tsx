@@ -12,7 +12,6 @@ import SignInScreen from './components/SignInScreen';
 import UnauthorizedScreen from './components/UnauthorizedScreen';
 import { DevBypassBanner } from './components/DevBypassBanner';
 import { Site, Cleaner, ViewType, FortnightPeriod, TimeEntry } from './types';
-import { getFortnightForDate } from './utils';
 import { ChevronLeft, ChevronRight, Loader2, Menu } from 'lucide-react';
 import { format, addDays } from 'date-fns';
 import { RoleProvider, useRole } from './contexts/RoleContext';
@@ -25,6 +24,7 @@ import { getSiteBudgets } from './repositories/budgetsRepo';
 import { getTimesheetEntriesForRange, saveTimesheetEntriesToSharePoint, type TimesheetEntryFlat } from './repositories/metricsRepo';
 import { getAssignedSiteIdsForManager } from './repositories/siteManagersRepo';
 import { getActiveCleanerIdsBySite } from './repositories/assignedCleanersRepo';
+import { getFortnightForTimesheetCompletion, getFortnightForDate, isFortnightLockedForView } from './utils';
 
 const AppGate: FC = () => {
   const { authStatus, signOut } = useAppAuth();
@@ -67,7 +67,7 @@ const AppContent: FC = () => {
   const [cleaners, setCleaners] = useState<Cleaner[]>([]);
   const [graphEntries, setGraphEntries] = useState<TimeEntry[]>([]);
   const [graphEntriesLoaded, setGraphEntriesLoaded] = useState(false);
-  const [currentPeriod, setCurrentPeriod] = useState<FortnightPeriod>(getFortnightForDate(new Date()));
+  const [currentPeriod, setCurrentPeriod] = useState<FortnightPeriod>(() => getFortnightForTimesheetCompletion(new Date()));
   const [dataLoading, setDataLoading] = useState(true);
   const [sidebarMobileOpen, setSidebarMobileOpen] = useState(false);
 
@@ -331,6 +331,16 @@ const AppContent: FC = () => {
     }
   };
 
+  const now = new Date();
+  const prevPeriod = getFortnightForDate(
+    new Date(currentPeriod.startDate.getTime() - 14 * 24 * 60 * 60 * 1000)
+  );
+  const nextPeriod = getFortnightForDate(
+    new Date(currentPeriod.startDate.getTime() + 14 * 24 * 60 * 60 * 1000)
+  );
+  const isPrevLocked = isFortnightLockedForView(now, prevPeriod.startDate, prevPeriod.endDate);
+  const isNextLocked = isFortnightLockedForView(now, nextPeriod.startDate, nextPeriod.endDate);
+
   return (
     <div className="flex min-h-screen so-app-shell min-w-0">
       <Sidebar
@@ -363,17 +373,12 @@ const AppContent: FC = () => {
             <DevBypassBanner />
             <div className="flex items-center gap-1 text-[11px] sm:text-[12px] text-gray-500 font-medium">
               <button
-                onClick={() =>
-                  setCurrentPeriod(
-                    getFortnightForDate(
-                      new Date(
-                        currentPeriod.startDate.getTime() -
-                          14 * 24 * 60 * 60 * 1000
-                      )
-                    )
-                  )
-                }
-                className="p-1.5 sm:p-1 hover:bg-gray-100 rounded-md touch-manipulation"
+                onClick={() => {
+                  if (isPrevLocked) return;
+                  setCurrentPeriod(prevPeriod);
+                }}
+                disabled={isPrevLocked}
+                className="p-1.5 sm:p-1 hover:bg-gray-100 rounded-md touch-manipulation disabled:opacity-40 disabled:cursor-not-allowed"
                 aria-label="Previous period"
               >
                 <ChevronLeft size={16} />
@@ -383,17 +388,12 @@ const AppContent: FC = () => {
                 {format(currentPeriod.endDate, 'MMM d')}
               </span>
               <button
-                onClick={() =>
-                  setCurrentPeriod(
-                    getFortnightForDate(
-                      new Date(
-                        currentPeriod.startDate.getTime() +
-                          14 * 24 * 60 * 60 * 1000
-                      )
-                    )
-                  )
-                }
-                className="p-1.5 sm:p-1 hover:bg-gray-100 rounded-md touch-manipulation"
+                onClick={() => {
+                  if (isNextLocked) return;
+                  setCurrentPeriod(nextPeriod);
+                }}
+                disabled={isNextLocked}
+                className="p-1.5 sm:p-1 hover:bg-gray-100 rounded-md touch-manipulation disabled:opacity-40 disabled:cursor-not-allowed"
                 aria-label="Next period"
               >
                 <ChevronRight size={16} />

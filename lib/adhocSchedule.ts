@@ -63,6 +63,10 @@ function nthWeekdayOfMonth(year: number, monthIndex0: number, weekday: number, w
   return d;
 }
 
+function monthIndexOf(d: Date): number {
+  return d.getFullYear() * 12 + d.getMonth();
+}
+
 function getDayType(date: Date, publicHolidayDates?: Set<string>): AdHocDayType {
   const key = toDateKey(date);
   if (publicHolidayDates?.has(key)) return "public_holiday";
@@ -113,6 +117,24 @@ function deriveWeekdayHours(job: AdHocJob): Record<number, number> {
     }
   }
   return out;
+}
+
+function normalizeRecurrenceFrequency(raw: string | null | undefined): "Weekly" | "Fortnightly" | "Monthly" | "Quarterly" | null {
+  const v = String(raw ?? "").trim().toLowerCase();
+  if (!v) return null;
+  if (v.startsWith("week")) return "Weekly";
+  if (v.startsWith("fort")) return "Fortnightly";
+  if (v.startsWith("quart")) return "Quarterly";
+  if (v.startsWith("month")) return "Monthly";
+  return null;
+}
+
+function normalizeMonthlyMode(raw: string | null | undefined): "day_of_month" | "nth_weekday" | null {
+  const v = String(raw ?? "").trim().toLowerCase().replace(/[\s-]+/g, "_");
+  if (!v) return null;
+  if (v === "day_of_month" || v === "dayofmonth") return "day_of_month";
+  if (v === "nth_weekday" || v === "nthweekday") return "nth_weekday";
+  return null;
 }
 
 export function generateAdHocOccurrencesForRange(
@@ -177,7 +199,7 @@ export function generateAdHocOccurrencesForRange(
   const weekdayHours = deriveWeekdayHours(job);
   const occurrences: AdHocOccurrence[] = [];
 
-  const freq = job.recurrenceFrequency ?? null;
+  const freq = normalizeRecurrenceFrequency(job.recurrenceFrequency);
   if (!freq) return [];
 
   if (freq === "Weekly" || freq === "Fortnightly") {
@@ -216,14 +238,22 @@ export function generateAdHocOccurrencesForRange(
     return occurrences;
   }
 
-  // Monthly
-  if (freq === "Monthly") {
-    const mode = job.monthlyMode ?? null;
+  // Monthly / Quarterly
+  if (freq === "Monthly" || freq === "Quarterly") {
+    const mode = normalizeMonthlyMode(job.monthlyMode);
     if (!mode) return [];
     // Walk month by month across range.
     let cursor = new Date(effective.start.getFullYear(), effective.start.getMonth(), 1);
     const lastMonth = new Date(effective.end.getFullYear(), effective.end.getMonth(), 1);
+    const anchorMonthIdx = monthIndexOf(recurrenceStart);
     while (cursor <= lastMonth) {
+      if (freq === "Quarterly") {
+        const diffMonths = monthIndexOf(cursor) - anchorMonthIdx;
+        if (diffMonths < 0 || diffMonths % 3 !== 0) {
+          cursor = new Date(cursor.getFullYear(), cursor.getMonth() + 1, 1);
+          continue;
+        }
+      }
       let occ: Date | null = null;
       if (mode === "day_of_month") {
         const dom = job.monthlyDayOfMonth ?? null;

@@ -239,8 +239,8 @@ const AppContent: FC = () => {
       // 1. Optimistic update: merge the batch we just saved into state so the UI shows saved hours immediately
       //    (avoids refetch returning before SharePoint has the new items and wiping the form to zeros)
       const optimisticEntries: TimeEntry[] = payload.map((p, i) => ({
-        id: `opt-${p.siteId}-${p.cleanerId}-${p.date}`,
-        batch_id: `opt-${p.siteId}-${p.cleanerId}-${p.date}`,
+        id: `opt-${p.siteId}-${p.cleanerId}-${p.date}-${(p as any).adhocJobId ?? "contract"}`,
+        batch_id: `opt-${p.siteId}-${p.cleanerId}-${p.date}-${(p as any).adhocJobId ?? "contract"}`,
         date: p.date,
         hours: p.hours,
         siteId: p.siteId,
@@ -250,8 +250,10 @@ const AppContent: FC = () => {
       } as TimeEntry));
       setGraphEntries((prev) => {
         const byKey = new Map<string, TimeEntry>();
-        prev.forEach((e) => byKey.set(`${e.siteId}|${e.cleanerId}|${e.date}`, e));
-        optimisticEntries.forEach((e) => byKey.set(`${e.siteId}|${e.cleanerId}|${e.date}`, e));
+        const entryKey = (e: TimeEntry) =>
+          `${e.siteId}|${e.cleanerId}|${e.date}|${e.adhocJobId ?? "contract"}`;
+        prev.forEach((e) => byKey.set(entryKey(e), e));
+        optimisticEntries.forEach((e) => byKey.set(entryKey(e), e));
         return Array.from(byKey.values());
       });
       setGraphEntriesLoaded(true);
@@ -262,8 +264,10 @@ const AppContent: FC = () => {
           const mapped = entriesFromServer.map((e) => mapFlatEntryToAppEntry(e));
           setGraphEntries((prev) => {
             const byKey = new Map<string, TimeEntry>();
-            prev.forEach((e) => byKey.set(`${e.siteId}|${e.cleanerId}|${e.date}`, e));
-            mapped.forEach((e) => byKey.set(`${e.siteId}|${e.cleanerId}|${e.date}`, e));
+            const entryKey = (e: TimeEntry) =>
+              `${e.siteId}|${e.cleanerId}|${e.date}|${e.adhocJobId ?? "contract"}`;
+            prev.forEach((e) => byKey.set(entryKey(e), e));
+            mapped.forEach((e) => byKey.set(entryKey(e), e));
             return Array.from(byKey.values());
           });
         })

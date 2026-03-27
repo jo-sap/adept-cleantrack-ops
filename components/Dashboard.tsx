@@ -162,14 +162,15 @@ const Dashboard: React.FC<DashboardProps> = ({ sites, cleaners, entries, current
     return map;
   }, [sites, cleaners]);
 
-  // Pre-process entries into a map for efficient lookups
+  // Pre-process entries into a map for efficient lookups (contract hours only — ad hoc has its own budget/revenue)
   const siteDailyMap = useMemo(() => {
     const map: Record<string, Record<string, number>> = {};
-    entries.forEach(e => {
+    entries.forEach((e) => {
+      if (!e.siteId || e.adhocJobId) return;
       const date = new Date(e.date);
       if (date >= currentPeriod.startDate && date <= currentPeriod.endDate) {
-        if (!map[e.siteId!]) map[e.siteId!] = {};
-        map[e.siteId!][e.date] = (map[e.siteId!][e.date] || 0) + e.hours;
+        if (!map[e.siteId]) map[e.siteId] = {};
+        map[e.siteId][e.date] = (map[e.siteId][e.date] || 0) + e.hours;
       }
     });
     return map;
@@ -185,10 +186,11 @@ const Dashboard: React.FC<DashboardProps> = ({ sites, cleaners, entries, current
       let actualHoursTotal = 0;
       let laborCostTotal = 0;
 
-      // Filter entries for this site and period
-      const siteEntries = entries.filter(e => {
+      // Contract / standard work only — same as Timesheets site queue (ad hoc must not inflate variance vs contract budget)
+      const siteEntries = entries.filter((e) => {
+        if (e.siteId !== site.id || e.adhocJobId) return false;
         const d = new Date(e.date);
-        return e.siteId === site.id && d >= currentPeriod.startDate && d <= currentPeriod.endDate;
+        return d >= currentPeriod.startDate && d <= currentPeriod.endDate;
       });
 
       siteEntries.forEach(e => {

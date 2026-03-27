@@ -150,7 +150,7 @@ export interface AdHocJob {
   timesheetApplicable?: boolean;
 
   /** Recurring schedule fields (optional; only used when Schedule Type = Recurring). */
-  recurrenceFrequency?: 'Weekly' | 'Fortnightly' | 'Monthly' | null;
+  recurrenceFrequency?: 'Weekly' | 'Fortnightly' | 'Monthly' | 'Quarterly' | null;
   /** Commencement/start date (yyyy-MM-dd). We reuse `scheduledDate` as the start date for recurring jobs. */
   recurrenceStartDate?: string | null;
   recurrenceEndDate?: string | null;

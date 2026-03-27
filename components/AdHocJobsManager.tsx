@@ -23,7 +23,7 @@ import { AppSelect } from "./ui";
 const STATUS_OPTIONS = ["Requested", "Approved", "Scheduled", "Completed", "Cancelled", "In Progress"];
 // Reuse the existing "Job Type" column as schedule semantics (minimal schema approach).
 const SCHEDULE_TYPE_OPTIONS = ["Once Off", "Recurring"];
-const RECURRENCE_FREQUENCY_OPTIONS = ["Weekly", "Fortnightly", "Monthly"] as const;
+const RECURRENCE_FREQUENCY_OPTIONS = ["Weekly", "Fortnightly", "Monthly", "Quarterly"] as const;
 const WEEK_OF_MONTH_OPTIONS = ["First", "Second", "Third", "Fourth", "Last"] as const;
 const MONTHLY_MODE_OPTIONS = [
   { id: "day_of_month", label: "Day of Month" },
@@ -448,6 +448,7 @@ export default function AdHocJobsManager() {
           sites={sites}
           managers={managers}
           currentUserId={currentUserId}
+          filterMonth={filterMonth}
           onClose={closeModal}
           onSaved={async () => {
             await loadJobs();
@@ -468,6 +469,7 @@ interface AdHocJobFormModalProps {
   sites: Site[];
   managers: { id: string; fullName: string; email: string }[];
   currentUserId: string | null;
+  filterMonth: string;
   onClose: () => void;
   onSaved: () => Promise<void> | void;
   submitLoading: boolean;
@@ -480,6 +482,7 @@ function AdHocJobFormModal({
   sites,
   managers,
   currentUserId,
+  filterMonth,
   onClose,
   onSaved,
   submitLoading,
@@ -750,9 +753,14 @@ function AdHocJobFormModal({
       const startDate = new Date(payload.scheduledDate);
       if (isNaN(startDate.getTime())) return null;
 
-      const today = new Date();
-      const monthStart = new Date(today.getFullYear(), today.getMonth(), 1);
-      const monthEnd = endOfMonth(today);
+      const [fy, fm] = String(filterMonth || "").split("-");
+      const y = Number(fy);
+      const m = Number(fm);
+      const monthStart =
+        Number.isFinite(y) && Number.isFinite(m) && m >= 1 && m <= 12
+          ? new Date(y, m - 1, 1)
+          : new Date(startDate.getFullYear(), startDate.getMonth(), 1);
+      const monthEnd = endOfMonth(monthStart);
 
       const endDate = payload.recurrenceEndDate ? new Date(payload.recurrenceEndDate) : null;
       if (endDate && isNaN(endDate.getTime())) return null;
@@ -772,7 +780,7 @@ function AdHocJobFormModal({
       const gpPercent = charge > 0 ? (grossProfit / charge) * 100 : null;
       return { charge, cost, grossProfit, markupPercent, gpPercent };
     },
-    [formToSyntheticJob]
+    [formToSyntheticJob, filterMonth]
   );
 
   const recurringTotals = useMemo(() => {
@@ -881,9 +889,9 @@ function AdHocJobFormModal({
           return;
         }
       }
-      if (form.recurrenceFrequency === "Monthly") {
+      if (form.recurrenceFrequency === "Monthly" || form.recurrenceFrequency === "Quarterly") {
         if (!form.monthlyMode) {
-          alert("Select a Monthly recurrence mode.");
+          alert("Select a Monthly/Quarterly recurrence mode.");
           return;
         }
         if (form.monthlyMode === "day_of_month") {
@@ -902,7 +910,7 @@ function AdHocJobFormModal({
           }
         }
         if ((form as any).monthlyHours == null) {
-          alert("Hours for the monthly occurrence is required.");
+          alert("Hours for the occurrence is required.");
           return;
         }
       }
@@ -933,8 +941,8 @@ function AdHocJobFormModal({
         // Recurring jobs: once-off budget fields are irrelevant.
         delete (payload as any).budgetedHours;
 
-        if (payload.recurrenceFrequency === "Monthly") {
-          // Monthly: weekday-hours are irrelevant.
+        if (payload.recurrenceFrequency === "Monthly" || payload.recurrenceFrequency === "Quarterly") {
+          // Monthly/Quarterly: weekday-hours are irrelevant.
           delete (payload as any).recurrenceWeekdays;
           delete (payload as any).weekdayHours;
 
@@ -1033,7 +1041,7 @@ function AdHocJobFormModal({
   );
 
   return (
-    <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center bg-black/40 p-0 sm:p-4" onClick={onClose}>
+    <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center bg-black/40 p-0 sm:p-4">
       <div
         className="bg-white w-full h-[100dvh] sm:h-auto sm:rounded-xl shadow-xl max-w-2xl sm:max-h-[90vh] overflow-y-auto"
         onClick={(e) => e.stopPropagation()}
@@ -1447,10 +1455,13 @@ function AdHocJobFormModal({
                 </div>
               )}
 
-              {form.recurrenceFrequency === "Monthly" && (
+              {(form.recurrenceFrequency === "Monthly" || form.recurrenceFrequency === "Quarterly") && (
                 <div className="space-y-3">
                   <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                    {field("Monthly Mode", "monthlyMode", (
+                    {field(
+                      form.recurrenceFrequency === "Quarterly" ? "Quarterly Mode" : "Monthly Mode",
+                      "monthlyMode",
+                      (
                       <AppSelect
                         id="monthlyMode"
                         value={form.monthlyMode ?? ""}
@@ -1529,7 +1540,12 @@ function AdHocJobFormModal({
                   )}
 
                   <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                    {field("Hours (monthly occurrence)", "monthlyHours", (
+                    {field(
+                      form.recurrenceFrequency === "Quarterly"
+                        ? "Hours (quarterly occurrence)"
+                        : "Hours (monthly occurrence)",
+                      "monthlyHours",
+                      (
                       <input
                         id="monthlyHours"
                         type="number"

@@ -100,6 +100,22 @@ function toNum(v: unknown): number | null {
   return Number.isNaN(n) ? null : n;
 }
 
+function toWeekdayIndex(v: unknown): number | null {
+  const n = toNum(v);
+  if (n != null && n >= 0 && n <= 6) return n;
+  const raw = String(v ?? "").trim().toLowerCase();
+  if (!raw) return null;
+  const s = raw.slice(0, 3);
+  if (s === "sun") return 0;
+  if (s === "mon") return 1;
+  if (s === "tue") return 2;
+  if (s === "wed") return 3;
+  if (s === "thu") return 4;
+  if (s === "fri") return 5;
+  if (s === "sat") return 6;
+  return null;
+}
+
 function toNumArray(v: unknown): number[] | null {
   if (v == null || v === "") return null;
   if (Array.isArray(v)) {
@@ -547,7 +563,7 @@ function itemToAdHocJob(
     monthlyMode: (getStr(f, monthlyModeKey) as any) || null,
     monthlyDayOfMonth: toNum(f[monthlyDomKey]),
     monthlyWeekOfMonth: (getStr(f, monthlyWomKey) as any) || null,
-    monthlyWeekday: toNum(f[monthlyWdKey]),
+    monthlyWeekday: toWeekdayIndex(f[monthlyWdKey]),
     monthlyHours: toNum(f[monthlyHoursKey]),
 
     weekdayChargeRateOverride: toNum(f[wdChargeKey]),
@@ -638,7 +654,7 @@ export interface AdHocJobPayload {
   status?: string;
   budgetedHours?: number | null;
   /** Recurring schedule fields (optional; only used when schedule type = Recurring). */
-  recurrenceFrequency?: 'Weekly' | 'Fortnightly' | 'Monthly' | null;
+  recurrenceFrequency?: 'Weekly' | 'Fortnightly' | 'Monthly' | 'Quarterly' | null;
   recurrenceEndDate?: string | null;
   /** Legacy: single hours-per-day (kept for backward compatibility). */
   hoursPerServiceDay?: number | null;

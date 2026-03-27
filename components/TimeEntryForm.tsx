@@ -325,6 +325,19 @@ const TimeEntryForm: React.FC<TimeEntryFormProps> = ({
     () => getPublicHolidaysInRange(currentPeriod.startDate, currentPeriod.endDate),
     [currentPeriod]
   );
+  const activeSiteStateCode = useMemo(
+    () => extractAustralianStateCode(activeSite?.state ?? activeSite?.address),
+    [activeSite]
+  );
+  const phForActiveSiteInPeriod = useMemo(
+    () =>
+      getPublicHolidaysInRange(
+        currentPeriod.startDate,
+        currentPeriod.endDate,
+        activeSiteStateCode || undefined
+      ),
+    [currentPeriod, activeSiteStateCode]
+  );
 
   useEffect(() => {
     let cancelled = false;
@@ -403,6 +416,12 @@ const TimeEntryForm: React.FC<TimeEntryFormProps> = ({
     const map: Record<string, number> = {};
     const weekdayDefault = 0;
     sites.forEach((site) => {
+      const siteStateCode = extractAustralianStateCode(site.state ?? site.address);
+      const phForSite = getPublicHolidaysInRange(
+        currentPeriod.startDate,
+        currentPeriod.endDate,
+        siteStateCode || undefined
+      );
       const weekdayRate = site.budget_weekday_labour_rate ?? site.budget_labour_rate ?? weekdayDefault;
       const saturdayRate = site.budget_saturday_labour_rate ?? weekdayRate;
       const sundayRate = site.budget_sunday_labour_rate ?? weekdayRate;
@@ -425,7 +444,7 @@ const TimeEntryForm: React.FC<TimeEntryFormProps> = ({
         dates.forEach((d, idx) => {
           const planned = getPlannedHoursForDate(site, idx, d);
           if (planned <= 0) return;
-          const rate = getSiteRateForDate(d, weekdayRate, saturdayRate, sundayRate, phRate, phInPeriod);
+          const rate = getSiteRateForDate(d, weekdayRate, saturdayRate, sundayRate, phRate, phForSite);
           cost += planned * rate;
         });
       } else {
@@ -439,13 +458,13 @@ const TimeEntryForm: React.FC<TimeEntryFormProps> = ({
           saturdayRate,
           sundayRate,
           phRate,
-          publicHolidayDates: phInPeriod,
+          publicHolidayDates: phForSite,
         });
       }
       map[site.id] = cost;
     });
     return map;
-  }, [sites, currentPeriod, phInPeriod, dates, getPlannedHoursForDate]);
+  }, [sites, currentPeriod, dates, getPlannedHoursForDate]);
 
   const adHocSummaryById = useMemo(() => {
     const map: Record<
@@ -482,19 +501,71 @@ const TimeEntryForm: React.FC<TimeEntryFormProps> = ({
     return map;
   }, [fortnightAdHocJobs, currentPeriod.startDate, currentPeriod.endDate, phInPeriod, entries]);
 
-  const filteredFortnightAdHocJobs = useMemo(() => {
-    if (stateFilter === 'ALL') return fortnightAdHocJobs;
-    return fortnightAdHocJobs.filter((job) => {
-      const manualState = extractAustralianStateCode(job.manualSiteState);
-      if (manualState) return manualState === stateFilter;
-      if (job.siteId) {
-        const linkedState = siteStateById[String(job.siteId)] || "";
-        if (linkedState) return linkedState === stateFilter;
-      }
-      const fallbackFromAddress = extractAustralianStateCode(job.manualSiteAddress);
-      return fallbackFromAddress === stateFilter;
+  const adHocCleanerNamesByJobId = useMemo(() => {
+    const startYmd = format(currentPeriod.startDate, "yyyy-MM-dd");
+    const endYmd = format(currentPeriod.endDate, "yyyy-MM-dd");
+    const map: Record<string, string[]> = {};
+    entries.forEach((e) => {
+      if (!e.adhocJobId || !e.cleanerId) return;
+      if (e.date < startYmd || e.date > endYmd) return;
+      const name = getCleanerDisplayName(cleaners.find((c) => c.id === e.cleanerId));
+      if (!name) return;
+      if (!map[e.adhocJobId]) map[e.adhocJobId] = [];
+      if (!map[e.adhocJobId].includes(name)) map[e.adhocJobId].push(name);
     });
-  }, [fortnightAdHocJobs, stateFilter, siteStateById]);
+    Object.keys(map).forEach((jobId) => {
+      map[jobId].sort((a, b) => a.localeCompare(b, undefined, { sensitivity: "base" }));
+    });
+    return map;
+  }, [entries, cleaners, currentPeriod.startDate, currentPeriod.endDate, getCleanerDisplayName]);
+
+  const filteredFortnightAdHocJobs = useMemo(() => {
+    let list =
+      stateFilter === 'ALL'
+        ? fortnightAdHocJobs
+        : fortnightAdHocJobs.filter((job) => {
+            const manualState = extractAustralianStateCode(job.manualSiteState);
+            if (manualState) return manualState === stateFilter;
+            if (job.siteId) {
+              const linkedState = siteStateById[String(job.siteId)] || "";
+              if (linkedState) return linkedState === stateFilter;
+            }
+            const fallbackFromAddress = extractAustralianStateCode(job.manualSiteAddress);
+            return fallbackFromAddress === stateFilter;
+          });
+
+    const q = siteSearchQuery.trim().toLowerCase();
+    if (q) {
+      list = list.filter((job) => {
+        const linkedSite = job.siteId
+          ? sites.find((s) => String(s.id) === String(job.siteId))
+          : undefined;
+        const resolvedSiteLabel =
+          linkedSite?.name?.trim() ||
+          job.manualSiteName?.trim() ||
+          job.siteName?.trim() ||
+          "";
+        const jobTitle = (getDisplayAdHocJobName(job) || job.jobName || "").toLowerCase();
+        const blob = [
+          jobTitle,
+          resolvedSiteLabel.toLowerCase(),
+          String(job.manualSiteAddress ?? "").toLowerCase(),
+          String(job.companyName ?? "").toLowerCase(),
+          String(job.clientName ?? "").toLowerCase(),
+          String(linkedSite?.address ?? "").toLowerCase(),
+        ].join(" ");
+        return blob.includes(q);
+      });
+    }
+    return list;
+  }, [
+    fortnightAdHocJobs,
+    stateFilter,
+    siteStateById,
+    siteSearchQuery,
+    sites,
+    getDisplayAdHocJobName,
+  ]);
 
   const queueCounts = useMemo(() => {
     let needs = 0;
@@ -882,6 +953,22 @@ const TimeEntryForm: React.FC<TimeEntryFormProps> = ({
     getPlannedHoursForDate,
   ]);
 
+  /** Contract uses only a fortnight cap with no per-day plan — 0h plan days can still accept hours. */
+  const contractUsesPeriodCapOnly = useMemo(() => {
+    if (!activeSite || adhocJobId || isVirtualAdHocContext) return false;
+    const isPeriodBudget =
+      activeSite.visit_frequency === "Monthly" || activeSite.visit_frequency === "Fortnightly";
+    const periodCap = activeSite.budgeted_hours_per_fortnight ?? 0;
+    const dailyPlanSum = dates.reduce(
+      (s, d, idx) => s + getPlannedHoursForDate(activeSite, idx, d),
+      0
+    );
+    const hasMonthlyRecurrence = activeSite.visit_frequency === "Monthly" && !!activeSite.monthlyMode;
+    return (
+      isPeriodBudget && periodCap > 0 && dailyPlanSum === 0 && !hasMonthlyRecurrence
+    );
+  }, [activeSite, adhocJobId, isVirtualAdHocContext, dates, getPlannedHoursForDate]);
+
   const handleHourChange = (dateStr: string, val: string) => {
     // Allow quarter‑hour (and other 2‑decimal) precision like 4.75
     const hours = val === '' ? 0 : Math.round(parseFloat(val) * 100) / 100;
@@ -1169,7 +1256,11 @@ const TimeEntryForm: React.FC<TimeEntryFormProps> = ({
     const saturdayRate = activeSite.budget_saturday_labour_rate ?? weekdayRate;
     const sundayRate = activeSite.budget_sunday_labour_rate ?? weekdayRate;
     const phRate = activeSite.budget_ph_labour_rate ?? weekdayRate;
-    const phInPeriod = getPublicHolidaysInRange(currentPeriod.startDate, currentPeriod.endDate);
+    const phInPeriod = getPublicHolidaysInRange(
+      currentPeriod.startDate,
+      currentPeriod.endDate,
+      activeSiteStateCode || undefined
+    );
 
     dates.forEach((date, idx) => {
       const dateStr = format(date, "yyyy-MM-dd");
@@ -1225,7 +1316,7 @@ const TimeEntryForm: React.FC<TimeEntryFormProps> = ({
       isPeriodBudget: usePeriodCap,
       periodCap,
     };
-  }, [activeSite, selectedCleanerId, dates, draftHours, siteEntriesByDate, adHocEntriesByDate, adhocJobId, activeAdHocJob, activeAdHocPlannedByDate, activeAdHocOccurrences, activeAdHocTotals, currentPeriod]);
+  }, [activeSite, selectedCleanerId, dates, draftHours, siteEntriesByDate, adHocEntriesByDate, adhocJobId, activeAdHocJob, activeAdHocPlannedByDate, activeAdHocOccurrences, activeAdHocTotals, currentPeriod, activeSiteStateCode]);
 
   const getMaxAllowedHoursForDate = useCallback(
     (dateStr: string): number => {
@@ -1393,6 +1484,16 @@ const TimeEntryForm: React.FC<TimeEntryFormProps> = ({
               </div>
               {adhocMode && (
                 <div className="sm:col-span-2 rounded-lg border border-amber-100 bg-amber-50/60 px-3 py-2 text-[11px] text-gray-700 leading-snug">
+                  {!!adhocJobId && (
+                    <span className="block mb-1">
+                      <span className="font-bold text-gray-800">Assigned cleaners</span> on this job:{" "}
+                      <span className="font-semibold">
+                        {(adHocCleanerNamesByJobId[adhocJobId] ?? []).length > 0
+                          ? adHocCleanerNamesByJobId[adhocJobId].join(", ")
+                          : "None saved yet this fortnight"}
+                      </span>.
+                    </span>
+                  )}
                   {activeAdHocJob?.serviceProvider?.trim() ? (
                     <span className="block mb-1">
                       <span className="font-bold text-gray-800">Service provider</span> on this job:{" "}
@@ -1526,6 +1627,7 @@ const TimeEntryForm: React.FC<TimeEntryFormProps> = ({
                 const remainingPlan = Math.max(sitePlan - otherHours, 0);
                 const planned = remainingPlan;
                 const hours = draftHours[dateStr] || 0;
+                const isPublicHolidayDay = phForActiveSiteInPeriod.has(dateStr);
                 // Same plan vs actual styling as contract sites so scheduled ad hoc days show Missing / On target / etc.
                 const status =
                   !isAdHoc && noServicePeriod
@@ -1540,10 +1642,39 @@ const TimeEntryForm: React.FC<TimeEntryFormProps> = ({
                 const existingForThisCleaner = dayAssignments[selectedCleanerId] || 0;
                 const fullyAllocatedToOthers =
                   sitePlan > 0 && remainingPlan <= 0 && existingForThisCleaner === 0;
+                const noHoursForCleaner =
+                  (draftHours[dateStr] !== undefined
+                    ? Number(draftHours[dateStr])
+                    : existingForThisCleaner) <= 0;
+                const readOnlyZeroPlanDay =
+                  !isAdHoc &&
+                  !contractUsesPeriodCapOnly &&
+                  !noServicePeriod &&
+                  planned <= 0 &&
+                  noHoursForCleaner;
+                const readOnlyZeroScheduledAdHocDay =
+                  isAdHoc && planned <= 0 && noHoursForCleaner;
+                const dayInputDisabled =
+                  periodLocked ||
+                  fullyAllocatedToOthers ||
+                  readOnlyZeroPlanDay ||
+                  readOnlyZeroScheduledAdHocDay;
                 const noServiceLabel = noServicePeriod?.label?.trim() || noServicePeriod?.reason?.trim() || "No Service";
+                const phTint = isPublicHolidayDay ? "ring-1 ring-violet-200 bg-violet-50/40" : "";
                 return (
-                  <div key={dateStr} onClick={() => inputRefs.current[dateStr]?.focus()} className={`flex flex-col p-2.5 sm:p-3 bg-white border rounded-xl cursor-pointer group relative overflow-hidden ${status.border} ${status.bg.replace('bg-', 'hover:bg-')}`}>
+                  <div
+                    key={dateStr}
+                    onClick={() => {
+                      if (!dayInputDisabled) inputRefs.current[dateStr]?.focus();
+                    }}
+                    className={`flex flex-col p-2.5 sm:p-3 bg-white border rounded-xl ${dayInputDisabled ? "cursor-default" : "cursor-pointer"} group relative overflow-hidden ${status.border} ${status.bg.replace('bg-', 'hover:bg-')} ${phTint}`}
+                  >
                     <div className={`absolute top-2 right-2 w-1.5 h-1.5 rounded-full ${status.dot}`} />
+                    {isPublicHolidayDay && (
+                      <div className="absolute top-2 right-5 px-1.5 py-0.5 rounded-full text-[7px] font-black uppercase tracking-wide bg-violet-100 text-violet-700 border border-violet-200">
+                        PH
+                      </div>
+                    )}
                     <div className="mb-1.5"><p className="text-[10px] font-bold text-gray-900 uppercase">{format(date, 'EEE')}</p><p className="text-[9px] font-medium text-gray-400">{format(date, 'MMM d')}</p></div>
                     <div className="mt-auto space-y-2">
                       <div className="flex justify-between items-center">
@@ -1582,7 +1713,7 @@ const TimeEntryForm: React.FC<TimeEntryFormProps> = ({
                           handleHourChange(dateStr, String(clamped));
                         }}
                         className="w-full px-2.5 py-2 text-center text-sm font-semibold bg-white border border-gray-300 rounded-lg focus:ring-2 focus:ring-gray-900/15 focus:border-gray-900 shadow-[inset_0_0_0_1px_rgba(15,23,42,0.02)] placeholder-gray-400 disabled:opacity-40 disabled:cursor-not-allowed"
-                        disabled={periodLocked || fullyAllocatedToOthers}
+                        disabled={dayInputDisabled}
                       />
                       {noServicePeriod && (
                         <div className="text-center text-[8px] font-bold uppercase text-gray-500">
@@ -1725,11 +1856,11 @@ const TimeEntryForm: React.FC<TimeEntryFormProps> = ({
           <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" size={18} />
           <input
             type="search"
-            placeholder="Search sites by name or address…"
+            placeholder="Search sites and ad hoc jobs by name or address…"
             value={siteSearchQuery}
             onChange={(e) => setSiteSearchQuery(e.target.value)}
             className="w-full pl-10 pr-4 py-2.5 so-input text-sm text-gray-900 placeholder-gray-400 bg-white"
-            aria-label="Search sites"
+            aria-label="Search sites and ad hoc jobs"
           />
         </div>
         <div className="w-full sm:w-[220px]">
@@ -1798,6 +1929,12 @@ const TimeEntryForm: React.FC<TimeEntryFormProps> = ({
                     <div className="min-w-0">
                       <h4 className="text-sm font-bold text-gray-900 truncate">{getDisplayAdHocJobName(job)}</h4>
                       <p className="text-[10px] text-gray-500 truncate uppercase font-bold">{siteLabel}</p>
+                      <p className="text-[10px] text-gray-600 truncate mt-0.5">
+                        Cleaners:{" "}
+                        {(adHocCleanerNamesByJobId[job.id] ?? []).length > 0
+                          ? adHocCleanerNamesByJobId[job.id].join(", ")
+                          : "None saved yet"}
+                      </p>
                       {job.serviceProvider?.trim() ? (
                         <p className="text-[10px] text-gray-600 truncate mt-0.5">
                           Provider: {job.serviceProvider.trim()}
@@ -1882,17 +2019,35 @@ const TimeEntryForm: React.FC<TimeEntryFormProps> = ({
                 </p>
               </div>
             </div>
-            <div className="hidden sm:flex -space-x-2 w-32">
-              {site.assigned_cleaner_ids.slice(0, 3).map(cid => (
-                <div
-                  key={cid}
-                  className={`w-8 h-8 rounded-xl border-2 border-white flex items-center justify-center text-[10px] font-bold shadow-sm ${
-                    isBalanced ? "bg-green-100 text-green-800" : "bg-gray-100 text-gray-500"
+            <div className="hidden sm:flex flex-col gap-0.5 justify-center min-w-0 max-w-[13rem] shrink">
+              {site.assigned_cleaner_ids.slice(0, 3).map((cid) => {
+                const name = getCleanerDisplayName(cleaners.find((c) => c.id === cid));
+                return (
+                  <span
+                    key={cid}
+                    title={name}
+                    className={`text-[10px] font-semibold leading-snug truncate ${
+                      isBalanced ? "text-green-800" : "text-gray-600"
+                    }`}
+                  >
+                    {name || "—"}
+                  </span>
+                );
+              })}
+              {site.assigned_cleaner_ids.length > 3 ? (
+                <span
+                  title={site.assigned_cleaner_ids
+                    .slice(3)
+                    .map((cid) => getCleanerDisplayName(cleaners.find((c) => c.id === cid)))
+                    .filter(Boolean)
+                    .join(", ")}
+                  className={`text-[9px] font-bold uppercase tracking-wide cursor-help border-b border-dotted border-current ${
+                    isBalanced ? "text-green-700" : "text-gray-400"
                   }`}
                 >
-                  {cleaners.find(c => c.id === cid)?.firstName.charAt(0)}
-                </div>
-              ))}
+                  +{site.assigned_cleaner_ids.length - 3} more
+                </span>
+              ) : null}
             </div>
             <div className="text-right border-l border-gray-100 pl-3 sm:pl-8 min-w-[96px] sm:min-w-[120px] space-y-1.5 sm:space-y-2 shrink-0">
               <div>

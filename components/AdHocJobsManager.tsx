@@ -23,6 +23,7 @@ import { AppSelect } from "./ui";
 const STATUS_OPTIONS = ["Requested", "Approved", "Scheduled", "Completed", "Cancelled", "In Progress"];
 // Reuse the existing "Job Type" column as schedule semantics (minimal schema approach).
 const SCHEDULE_TYPE_OPTIONS = ["Once Off", "Recurring"];
+const COMPANY_NAME_OPTIONS = ["Adept Services", "Bayton Cleaning"] as const;
 const RECURRENCE_FREQUENCY_OPTIONS = ["Weekly", "Fortnightly", "Monthly", "Quarterly", "Half Yearly", "Annually"] as const;
 const WEEK_OF_MONTH_OPTIONS = ["First", "Second", "Third", "Fourth", "Last"] as const;
 const MONTHLY_MODE_OPTIONS = [
@@ -65,6 +66,7 @@ export default function AdHocJobsManager() {
 
   const [filterMonth, setFilterMonth] = useState<string>(() => format(new Date(), "yyyy-MM"));
   const [filterStatus, setFilterStatus] = useState<string>("");
+  const [filterCompanyName, setFilterCompanyName] = useState<string>("");
   const [filterManagerId, setFilterManagerId] = useState<string>("");
   const [filterSiteId, setFilterSiteId] = useState<string>("");
 
@@ -91,6 +93,7 @@ export default function AdHocJobsManager() {
     | "jobName"
     | "schedule"
     | "manager"
+    | "company"
     | "scheduled"
     | "completed"
     | "status"
@@ -113,6 +116,8 @@ export default function AdHocJobsManager() {
         cmp = strCmp(scheduleTypeLabel(a.jobType).toLowerCase(), scheduleTypeLabel(b.jobType).toLowerCase());
       } else if (adHocSortBy === "manager") {
         cmp = strCmp((a.assignedManagerName || "").toLowerCase(), (b.assignedManagerName || "").toLowerCase());
+      } else if (adHocSortBy === "company") {
+        cmp = strCmp((a.companyName || "").toLowerCase(), (b.companyName || "").toLowerCase());
       } else if (adHocSortBy === "scheduled" || adHocSortBy === "completed") {
         const key = adHocSortBy === "scheduled" ? "scheduledDate" : "completedDate";
         const isoA = a[key as keyof AdHocJob] as string | null | undefined;
@@ -172,6 +177,7 @@ export default function AdHocJobsManager() {
     try {
       const filters: AdHocJobFilters = { month: filterMonth };
       if (filterStatus) filters.status = filterStatus;
+      if (filterCompanyName) filters.companyName = filterCompanyName;
       if (filterManagerId) filters.assignedManagerId = filterManagerId;
       if (filterSiteId) filters.siteId = filterSiteId;
       if (!isAdmin && user?.email) {
@@ -187,7 +193,7 @@ export default function AdHocJobsManager() {
     } finally {
       setLoading(false);
     }
-  }, [isAdmin, user?.email, filterMonth, filterStatus, filterManagerId, filterSiteId]);
+  }, [isAdmin, user?.email, filterMonth, filterStatus, filterCompanyName, filterManagerId, filterSiteId]);
 
   useEffect(() => {
     loadJobs();
@@ -263,7 +269,7 @@ export default function AdHocJobsManager() {
       </p>
 
       <div className="flex flex-col gap-4 sm:gap-5">
-        <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-3">
+        <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-5 gap-3">
           <label className="flex flex-col gap-1.5">
             <span className="text-[11px] font-bold text-gray-500 uppercase">Month</span>
             <input
@@ -280,6 +286,15 @@ export default function AdHocJobsManager() {
             options={[
               { value: "", label: "All" },
               ...STATUS_OPTIONS.map((s) => ({ value: s, label: s })),
+            ]}
+          />
+          <AppSelect
+            label="Company"
+            value={filterCompanyName}
+            onChange={setFilterCompanyName}
+            options={[
+              { value: "", label: "All" },
+              ...COMPANY_NAME_OPTIONS.map((c) => ({ value: c, label: c })),
             ]}
           />
           {isAdmin && (
@@ -379,6 +394,9 @@ export default function AdHocJobsManager() {
                       {scheduleTypeLabel(j.jobType)} · {j.assignedManagerName || "No manager"}
                     </p>
                     <p className="text-[11px] text-gray-500 mt-0.5">
+                      Company: {j.companyName || "—"}
+                    </p>
+                    <p className="text-[11px] text-gray-500 mt-0.5">
                       Scheduled: {j.scheduledDate ? format(new Date(j.scheduledDate), "dd/MM/yy") : "—"}
                     </p>
                     <div className="mt-1.5">
@@ -418,10 +436,10 @@ export default function AdHocJobsManager() {
           })}
         </div>
         <div className="hidden md:block border border-[#edeef0] rounded-lg bg-white shadow-sm table-scroll-mobile">
-          <table className="w-full min-w-[920px] border-collapse text-left table-fixed">
+          <table className="w-full min-w-[1020px] border-collapse text-left table-fixed">
             <thead>
               <tr className="bg-[#fcfcfb] border-b border-[#edeef0]">
-                <th className="w-[21%] px-2 py-2 text-left align-middle">
+                <th className="w-[18%] px-2 py-2 text-left align-middle">
                   <button
                     type="button"
                     onClick={() => handleAdHocSort("jobName")}
@@ -431,7 +449,7 @@ export default function AdHocJobsManager() {
                     {adHocSortBy === "jobName" && (adHocSortDir === "asc" ? <ChevronUp size={12} className="shrink-0" /> : <ChevronDown size={12} className="shrink-0" />)}
                   </button>
                 </th>
-                <th className="w-[10%] px-2 py-2 align-middle">
+                <th className="w-[9%] px-2 py-2 align-middle">
                   <button
                     type="button"
                     onClick={() => handleAdHocSort("schedule")}
@@ -441,7 +459,7 @@ export default function AdHocJobsManager() {
                     {adHocSortBy === "schedule" && (adHocSortDir === "asc" ? <ChevronUp size={12} className="shrink-0" /> : <ChevronDown size={12} className="shrink-0" />)}
                   </button>
                 </th>
-                <th className="w-[15%] px-2 py-2 align-middle">
+                <th className="w-[12%] px-2 py-2 align-middle">
                   <button
                     type="button"
                     onClick={() => handleAdHocSort("manager")}
@@ -451,7 +469,17 @@ export default function AdHocJobsManager() {
                     {adHocSortBy === "manager" && (adHocSortDir === "asc" ? <ChevronUp size={12} className="shrink-0" /> : <ChevronDown size={12} className="shrink-0" />)}
                   </button>
                 </th>
-                <th className="w-[10%] px-2 py-2 align-middle">
+                <th className="w-[11%] px-2 py-2 align-middle">
+                  <button
+                    type="button"
+                    onClick={() => handleAdHocSort("company")}
+                    className="text-[9px] font-bold text-gray-500 uppercase tracking-widest inline-flex items-center gap-0.5 hover:text-gray-800 focus:outline-none focus:ring-2 focus:ring-gray-900/20 rounded"
+                  >
+                    Company
+                    {adHocSortBy === "company" && (adHocSortDir === "asc" ? <ChevronUp size={12} className="shrink-0" /> : <ChevronDown size={12} className="shrink-0" />)}
+                  </button>
+                </th>
+                <th className="w-[9%] px-2 py-2 align-middle">
                   <button
                     type="button"
                     onClick={() => handleAdHocSort("scheduled")}
@@ -461,7 +489,7 @@ export default function AdHocJobsManager() {
                     {adHocSortBy === "scheduled" && (adHocSortDir === "asc" ? <ChevronUp size={12} className="shrink-0" /> : <ChevronDown size={12} className="shrink-0" />)}
                   </button>
                 </th>
-                <th className="w-[10%] px-2 py-2 align-middle">
+                <th className="w-[9%] px-2 py-2 align-middle">
                   <button
                     type="button"
                     onClick={() => handleAdHocSort("completed")}
@@ -471,7 +499,7 @@ export default function AdHocJobsManager() {
                     {adHocSortBy === "completed" && (adHocSortDir === "asc" ? <ChevronUp size={12} className="shrink-0" /> : <ChevronDown size={12} className="shrink-0" />)}
                   </button>
                 </th>
-                <th className="w-[10%] px-2 py-2 align-middle">
+                <th className="w-[9%] px-2 py-2 align-middle">
                   <button
                     type="button"
                     onClick={() => handleAdHocSort("status")}
@@ -481,7 +509,7 @@ export default function AdHocJobsManager() {
                     {adHocSortBy === "status" && (adHocSortDir === "asc" ? <ChevronUp size={12} className="shrink-0" /> : <ChevronDown size={12} className="shrink-0" />)}
                   </button>
                 </th>
-                <th className="w-[8%] px-2 py-2 align-middle">
+                <th className="w-[7%] px-2 py-2 align-middle">
                   <button
                     type="button"
                     onClick={() => handleAdHocSort("charge")}
@@ -501,7 +529,7 @@ export default function AdHocJobsManager() {
                     {adHocSortBy === "cost" && (adHocSortDir === "asc" ? <ChevronUp size={12} className="shrink-0" /> : <ChevronDown size={12} className="shrink-0" />)}
                   </button>
                 </th>
-                <th className="w-[9%] px-2 py-2 align-middle">
+                <th className="w-[8%] px-2 py-2 align-middle">
                   <button
                     type="button"
                     onClick={() => handleAdHocSort("gp")}
@@ -511,7 +539,7 @@ export default function AdHocJobsManager() {
                     {adHocSortBy === "gp" && (adHocSortDir === "asc" ? <ChevronUp size={12} className="shrink-0" /> : <ChevronDown size={12} className="shrink-0" />)}
                   </button>
                 </th>
-                <th className="w-[10%] px-2 py-2 text-[9px] font-bold text-gray-500 uppercase tracking-widest align-middle">
+                <th className="w-[11%] px-2 py-2 text-[9px] font-bold text-gray-500 uppercase tracking-widest align-middle">
                   Actions
                 </th>
               </tr>
@@ -540,6 +568,9 @@ export default function AdHocJobsManager() {
                   </td>
                   <td className="px-2 py-2 text-[11px] text-gray-600" title={j.assignedManagerName || "—"}>
                     <span className="block truncate">{j.assignedManagerName || "—"}</span>
+                  </td>
+                  <td className="px-2 py-2 text-[11px] text-gray-600" title={j.companyName || "—"}>
+                    <span className="block truncate">{j.companyName || "—"}</span>
                   </td>
                   <td className="px-2 py-2 text-[11px] text-gray-700">{j.scheduledDate ? format(new Date(j.scheduledDate), "dd/MM/yy") : "—"}</td>
                   <td className="px-2 py-2 text-[11px] text-gray-700">{j.completedDate ? format(new Date(j.completedDate), "dd/MM/yy") : "—"}</td>
@@ -644,7 +675,7 @@ function AdHocJobFormModal({
   const [form, setForm] = useState<AdHocJobPayload>({
     jobName: job?.jobName ?? "",
     jobType: job?.jobType ?? "",
-    companyName: job?.companyName ?? "",
+    companyName: job?.companyName ?? COMPANY_NAME_OPTIONS[0],
     clientName: job?.clientName ?? "",
     siteId: job?.siteId ?? null,
     manualSiteName: job?.manualSiteName ?? "",
@@ -1263,12 +1294,11 @@ function AdHocJobFormModal({
           ))}
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             {field("Company Name", "companyName", (
-              <input
+              <AppSelect
                 id="companyName"
-                type="text"
                 value={form.companyName ?? ""}
-                onChange={(e) => setForm((f) => ({ ...f, companyName: e.target.value }))}
-                className="w-full border border-[#edeef0] rounded-lg px-3 py-2 text-sm"
+                onChange={(v) => setForm((f) => ({ ...f, companyName: v }))}
+                options={COMPANY_NAME_OPTIONS.map((opt) => ({ value: opt, label: opt }))}
               />
             ))}
             {field("Client Name", "clientName", (

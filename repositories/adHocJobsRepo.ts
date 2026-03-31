@@ -78,6 +78,7 @@ export interface AdHocJobFilters {
   /** Filter by calendar month if any of requested / scheduled / completed / recurrence-end date falls in YYYY-MM. */
   month?: string;
   status?: string;
+  companyName?: string;
   assignedManagerId?: string;
   siteId?: string;
 }
@@ -621,6 +622,9 @@ export async function getAdHocJobs(
   }
   if (filters?.status) {
     list = list.filter((j) => j.status.toLowerCase() === filters!.status!.toLowerCase());
+  }
+  if (filters?.companyName) {
+    list = list.filter((j) => (j.companyName || "").toLowerCase() === filters.companyName!.toLowerCase());
   }
   if (filters?.assignedManagerId) {
     const norm = sharepoint.normalizeListItemId(filters.assignedManagerId);

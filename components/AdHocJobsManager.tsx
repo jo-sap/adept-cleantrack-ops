@@ -23,7 +23,7 @@ import { AppSelect } from "./ui";
 const STATUS_OPTIONS = ["Requested", "Approved", "Scheduled", "Completed", "Cancelled", "In Progress"];
 // Reuse the existing "Job Type" column as schedule semantics (minimal schema approach).
 const SCHEDULE_TYPE_OPTIONS = ["Once Off", "Recurring"];
-const RECURRENCE_FREQUENCY_OPTIONS = ["Weekly", "Fortnightly", "Monthly", "Quarterly"] as const;
+const RECURRENCE_FREQUENCY_OPTIONS = ["Weekly", "Fortnightly", "Monthly", "Quarterly", "Half Yearly", "Annually"] as const;
 const WEEK_OF_MONTH_OPTIONS = ["First", "Second", "Third", "Fourth", "Last"] as const;
 const MONTHLY_MODE_OPTIONS = [
   { id: "day_of_month", label: "Day of Month" },
@@ -1049,9 +1049,14 @@ function AdHocJobFormModal({
           return;
         }
       }
-      if (form.recurrenceFrequency === "Monthly" || form.recurrenceFrequency === "Quarterly") {
+      if (
+        form.recurrenceFrequency === "Monthly" ||
+        form.recurrenceFrequency === "Quarterly" ||
+        form.recurrenceFrequency === "Half Yearly" ||
+        form.recurrenceFrequency === "Annually"
+      ) {
         if (!form.monthlyMode) {
-          alert("Select a Monthly/Quarterly recurrence mode.");
+          alert("Select a recurrence mode.");
           return;
         }
         if (form.monthlyMode === "day_of_month") {
@@ -1101,8 +1106,13 @@ function AdHocJobFormModal({
         // Recurring jobs: once-off budget fields are irrelevant.
         delete (payload as any).budgetedHours;
 
-        if (payload.recurrenceFrequency === "Monthly" || payload.recurrenceFrequency === "Quarterly") {
-          // Monthly/Quarterly: weekday-hours are irrelevant.
+        if (
+          payload.recurrenceFrequency === "Monthly" ||
+          payload.recurrenceFrequency === "Quarterly" ||
+          payload.recurrenceFrequency === "Half Yearly" ||
+          payload.recurrenceFrequency === "Annually"
+        ) {
+          // Monthly-family cadence: weekday-hours are irrelevant.
           delete (payload as any).recurrenceWeekdays;
           delete (payload as any).weekdayHours;
 
@@ -1615,11 +1625,16 @@ function AdHocJobFormModal({
                 </div>
               )}
 
-              {(form.recurrenceFrequency === "Monthly" || form.recurrenceFrequency === "Quarterly") && (
+              {(
+                form.recurrenceFrequency === "Monthly" ||
+                form.recurrenceFrequency === "Quarterly" ||
+                form.recurrenceFrequency === "Half Yearly" ||
+                form.recurrenceFrequency === "Annually"
+              ) && (
                 <div className="space-y-3">
                   <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                     {field(
-                      form.recurrenceFrequency === "Quarterly" ? "Quarterly Mode" : "Monthly Mode",
+                      "Recurrence Mode",
                       "monthlyMode",
                       (
                       <AppSelect
@@ -1701,9 +1716,7 @@ function AdHocJobFormModal({
 
                   <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                     {field(
-                      form.recurrenceFrequency === "Quarterly"
-                        ? "Hours (quarterly occurrence)"
-                        : "Hours (monthly occurrence)",
+                      "Hours (per occurrence)",
                       "monthlyHours",
                       (
                       <input

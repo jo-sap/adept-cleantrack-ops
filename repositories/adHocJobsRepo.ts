@@ -654,7 +654,7 @@ export interface AdHocJobPayload {
   status?: string;
   budgetedHours?: number | null;
   /** Recurring schedule fields (optional; only used when schedule type = Recurring). */
-  recurrenceFrequency?: 'Weekly' | 'Fortnightly' | 'Monthly' | 'Quarterly' | null;
+  recurrenceFrequency?: 'Weekly' | 'Fortnightly' | 'Monthly' | 'Quarterly' | 'Half Yearly' | 'Annually' | null;
   recurrenceEndDate?: string | null;
   /** Legacy: single hours-per-day (kept for backward compatibility). */
   hoursPerServiceDay?: number | null;

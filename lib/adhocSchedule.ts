@@ -119,12 +119,16 @@ function deriveWeekdayHours(job: AdHocJob): Record<number, number> {
   return out;
 }
 
-function normalizeRecurrenceFrequency(raw: string | null | undefined): "Weekly" | "Fortnightly" | "Monthly" | "Quarterly" | null {
+function normalizeRecurrenceFrequency(
+  raw: string | null | undefined
+): "Weekly" | "Fortnightly" | "Monthly" | "Quarterly" | "Half Yearly" | "Annually" | null {
   const v = String(raw ?? "").trim().toLowerCase();
   if (!v) return null;
   if (v.startsWith("week")) return "Weekly";
   if (v.startsWith("fort")) return "Fortnightly";
   if (v.startsWith("quart")) return "Quarterly";
+  if (v.startsWith("half")) return "Half Yearly";
+  if (v.startsWith("ann")) return "Annually";
   if (v.startsWith("month")) return "Monthly";
   return null;
 }
@@ -238,8 +242,13 @@ export function generateAdHocOccurrencesForRange(
     return occurrences;
   }
 
-  // Monthly / Quarterly
-  if (freq === "Monthly" || freq === "Quarterly") {
+  // Monthly-family cadence (monthly, quarterly, half-yearly, annually)
+  if (
+    freq === "Monthly" ||
+    freq === "Quarterly" ||
+    freq === "Half Yearly" ||
+    freq === "Annually"
+  ) {
     const mode = normalizeMonthlyMode(job.monthlyMode);
     if (!mode) return [];
     // Walk month by month across range.
@@ -247,9 +256,14 @@ export function generateAdHocOccurrencesForRange(
     const lastMonth = new Date(effective.end.getFullYear(), effective.end.getMonth(), 1);
     const anchorMonthIdx = monthIndexOf(recurrenceStart);
     while (cursor <= lastMonth) {
-      if (freq === "Quarterly") {
+      let monthStep = 1;
+      if (freq === "Quarterly") monthStep = 3;
+      else if (freq === "Half Yearly") monthStep = 6;
+      else if (freq === "Annually") monthStep = 12;
+
+      if (monthStep > 1) {
         const diffMonths = monthIndexOf(cursor) - anchorMonthIdx;
-        if (diffMonths < 0 || diffMonths % 3 !== 0) {
+        if (diffMonths < 0 || diffMonths % monthStep !== 0) {
           cursor = new Date(cursor.getFullYear(), cursor.getMonth() + 1, 1);
           continue;
         }

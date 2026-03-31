@@ -12,7 +12,7 @@ import { getAdHocJobs } from '../repositories/adHocJobsRepo';
 import { getCleanTrackUserByEmail } from '../repositories/usersRepo';
 import { DEV_BYPASS_LOGIN } from '../config/authFlags';
 import { formatCurrencyAUD, formatCurrencyAUDSignedExpense, formatPercent } from '../utils';
-import { computeBudgetedLabourCostForRange } from '../lib/budgetedLabourCost';
+import { computeBudgetedLabourCostForRange, getSiteRateForDate } from '../lib/budgetedLabourCost';
 import { getPublicHolidaysInRange } from '../lib/publicHolidays';
 import { format } from 'date-fns';
 
@@ -193,10 +193,16 @@ const Dashboard: React.FC<DashboardProps> = ({ sites, cleaners, entries, current
         return d >= currentPeriod.startDate && d <= currentPeriod.endDate;
       });
 
-      siteEntries.forEach(e => {
+      const weekdayRate = site.budget_weekday_labour_rate ?? site.budget_labour_rate ?? 0;
+      const saturdayRate = site.budget_saturday_labour_rate ?? weekdayRate;
+      const sundayRate = site.budget_sunday_labour_rate ?? weekdayRate;
+      const phRate = site.budget_ph_labour_rate ?? weekdayRate;
+      const phInPeriod = getPublicHolidaysInRange(currentPeriod.startDate, currentPeriod.endDate);
+
+      siteEntries.forEach((e) => {
         actualHoursTotal += e.hours;
-        const cleaner = cleaners.find(c => c.id === e.cleanerId);
-        const rate = e.pay_rate_snapshot || cleaner?.payRatePerHour || 0;
+        const d = new Date(e.date);
+        const rate = getSiteRateForDate(d, weekdayRate, saturdayRate, sundayRate, phRate, phInPeriod);
         laborCostTotal += e.hours * rate;
       });
 
@@ -205,13 +211,8 @@ const Dashboard: React.FC<DashboardProps> = ({ sites, cleaners, entries, current
       
       // Fortnightly Revenue = (Monthly * 12) / 26
       const fortnightRevenue = (site.monthly_revenue * 12) / 26;
-      const weekdayRate = site.budget_weekday_labour_rate ?? site.budget_labour_rate ?? 0;
-      const saturdayRate = site.budget_saturday_labour_rate ?? weekdayRate;
-      const sundayRate = site.budget_sunday_labour_rate ?? weekdayRate;
-      const phRate = site.budget_ph_labour_rate ?? weekdayRate;
       const dailyBudgets = site.daily_budgets ?? [0, 0, 0, 0, 0, 0, 0]; // [Sun, Mon, ..., Sat]
       // Date-aware budget: each day in the period uses PH / Sat / Sun / Weekday rate so budget matches actuals
-      const phInPeriod = getPublicHolidaysInRange(currentPeriod.startDate, currentPeriod.endDate);
       const budgetedLabourCost = computeBudgetedLabourCostForRange({
         startDate: currentPeriod.startDate,
         endDate: currentPeriod.endDate,
@@ -250,7 +251,7 @@ const Dashboard: React.FC<DashboardProps> = ({ sites, cleaners, entries, current
       totalGrossProfit: totalPortfolioRevenue - totalPortfolioLaborCost,
       portfolioMargin: totalPortfolioRevenue > 0 ? ((totalPortfolioRevenue - totalPortfolioLaborCost) / totalPortfolioRevenue) * 100 : 0
     };
-  }, [sites, cleaners, entries, currentPeriod, siteDailyMap]);
+  }, [sites, entries, currentPeriod, siteDailyMap]);
 
   // Use API KPIs when present and non-zero; otherwise use client-computed financial metrics (sites + entries)
   const displayMetrics = useMemo(() => {

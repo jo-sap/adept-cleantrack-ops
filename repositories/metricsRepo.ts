@@ -1,4 +1,8 @@
 import * as sharepoint from "../lib/sharepoint";
+import { getPublicHolidaysInRange } from "../lib/publicHolidays";
+import { getSiteRateForDate } from "../lib/budgetedLabourCost";
+import { AU_STATES } from "../lib/auStates";
+import { getSiteBudgets } from "./budgetsRepo";
 
 /** end is exclusive */
 export type DateRange = { start: Date; end: Date };
@@ -11,7 +15,6 @@ export interface DashboardMetrics {
 }
 
 const SITES_LIST_NAME = "CleanTrack Sites";
-const CLEANERS_LIST_NAME = "CleanTrack Cleaners";
 const TIMESHEETS_LIST_NAME = "CleanTrack Timesheet Entries";
 
 function toDate(v: unknown): Date | null {
@@ -123,38 +126,91 @@ function getLookupIdOrName(f: Record<string, unknown>, columnBase: string): { id
   return { id, name };
 }
 
-/** Build map: cleaner id -> pay rate, and cleaner name (normalized) -> pay rate. */
-function buildCleanerRateMap(
-  cleanerItems: sharepoint.GraphListItem[]
-): Record<string, number> {
-  const map: Record<string, number> = {};
-  if (cleanerItems.length === 0) return map;
-  const nameKey =
-    Object.keys(cleanerItems[0].fields ?? {}).find(
-      (k) => k === "Cleaner Name" || k.toLowerCase() === "cleaner name"
-    ) ?? "Cleaner Name";
-  const payRateKey =
-    Object.keys(cleanerItems[0].fields ?? {}).find(
-      (k) => k === "Pay Rate" || k.toLowerCase() === "pay rate"
-    ) ?? "Pay Rate";
+function normalizeFieldKey(k: string): string {
+  return k.toLowerCase().replace(/[^a-z0-9]/g, "");
+}
 
-  for (const item of cleanerItems) {
-    const f = item.fields ?? {};
-    if (!isActive(f)) continue;
-    const name = String(f[nameKey] ?? "").trim();
-    const rate = toNum(f[payRateKey]);
-    if (item.id) map[item.id] = rate;
-    if (name) map[name.toLowerCase()] = rate;
+function findNumField(f: Record<string, unknown>, candidates: string[]): number | undefined {
+  const normalized = new Set(candidates.map((c) => normalizeFieldKey(c)));
+  for (const k of Object.keys(f)) {
+    if (normalized.has(normalizeFieldKey(k))) return toNum(f[k]);
   }
+  return undefined;
+}
+
+function coerceAustralianStateCode(value: unknown): string | undefined {
+  const raw = String(value ?? "").trim();
+  if (!raw) return undefined;
+
+  const upper = raw.toUpperCase();
+  const lettersOnly = upper.replace(/[^A-Z]/g, "");
+  for (const state of AU_STATES) {
+    if (lettersOnly === state) return state;
+  }
+
+  // Match full names (depends on how SharePoint is configured).
+  if (upper.includes("NEW SOUTH WALES")) return "NSW";
+  if (upper.includes("VICTORIA")) return "VIC";
+  if (upper.includes("QUEENSLAND")) return "QLD";
+  if (upper.includes("SOUTH AUSTRALIA")) return "SA";
+  if (upper.includes("WESTERN AUSTRALIA")) return "WA";
+  if (upper.includes("TASMANIA")) return "TAS";
+  if (upper.includes("NORTHERN TERRITORY")) return "NT";
+  if (upper.includes("AUSTRALIAN CAPITAL TERRITORY")) return "ACT";
+  return undefined;
+}
+
+type SiteRateInfo = {
+  weekdayRate: number;
+  saturdayRate: number;
+  sundayRate: number;
+  phRate: number;
+  stateCode?: string;
+};
+
+function buildSiteRateInfoMap(siteItems: sharepoint.GraphListItem[]): Record<string, SiteRateInfo> {
+  const map: Record<string, SiteRateInfo> = {};
+  if (siteItems.length === 0) return map;
+
+  for (const item of siteItems) {
+    const id = item.id ? sharepoint.normalizeListItemId(item.id) : "";
+    if (!id) continue;
+    const f = (item.fields ?? {}) as Record<string, unknown>;
+    if (!isActive(f)) continue;
+
+    // Budgeted labour rates (week-day / sat / sun / PH). Fall back to any legacy “Budget Labour Rate”.
+    const weekday =
+      findNumField(f, ["Weekday Labour Rate", "WeekdayLabourRate", "Budget Labour Rate", "BudgetLabourRate"]) ??
+      0;
+    const saturday =
+      findNumField(f, ["Saturday Labour Rate", "SaturdayLabourRate"]) ?? weekday;
+    const sunday =
+      findNumField(f, ["Sunday Labour Rate", "SundayLabourRate"]) ?? weekday;
+    const ph =
+      findNumField(f, ["PH Labour Rate", "PHLabourRate", "Public Holiday Labour Rate", "PublicHolidayLabourRate"]) ?? weekday;
+
+    const stateRaw =
+      (f["State"] ?? f["state"] ?? f["Address"] ?? f["address"] ?? "") as unknown;
+    const stateCode = coerceAustralianStateCode(stateRaw);
+
+    map[id] = {
+      weekdayRate: weekday,
+      saturdayRate: saturday,
+      sundayRate: sunday,
+      phRate: ph,
+      stateCode,
+    };
+  }
+
   return map;
 }
 
-/** Labor = sum(Hours * Cleaner.PayRate) for entries in range. */
-function computeLaborExpenses(
+/** Labor = sum(Hours × Site $/hr) for entries in range (no cleaner pay rate). */
+function computeLaborExpensesFromSiteBudgets(
   timesheetItems: sharepoint.GraphListItem[],
-  cleanerRateMap: Record<string, number>,
+  siteRateInfoMap: Record<string, SiteRateInfo>,
   range: DateRange
-): { labor: number; error?: string } {
+): { labor: number } {
   if (timesheetItems.length === 0) return { labor: 0 };
   const workDateKey =
     Object.keys(timesheetItems[0].fields ?? {}).find(
@@ -166,31 +222,42 @@ function computeLaborExpenses(
     ) ?? "Hours";
 
   let labor = 0;
-  const missingCleaners = new Set<string>();
+  const phCache = new Map<string, Set<string>>();
+
+  const getPhSetForState = (stateCode?: string) => {
+    const key = stateCode ?? "__default__";
+    const existing = phCache.get(key);
+    if (existing) return existing;
+    const set = getPublicHolidaysInRange(range.start, range.end, stateCode || undefined);
+    phCache.set(key, set);
+    return set;
+  };
 
   for (const item of timesheetItems) {
-    const f = item.fields ?? {};
+    const f = (item.fields ?? {}) as Record<string, unknown>;
     const workDate = toDate(f[workDateKey]);
     if (!workDate || !dateInRange(workDate, range)) continue;
     const hours = toNum(f[hoursKey]);
-    const { id: cleanerId, name: cleanerName } = getLookupIdOrName(f, "Cleaner");
-    const rate =
-      (cleanerId && cleanerRateMap[cleanerId] !== undefined ? cleanerRateMap[cleanerId] : null) ??
-      (cleanerName ? cleanerRateMap[cleanerName.toLowerCase()] : undefined);
-    if (rate === undefined || (typeof rate === "number" && Number.isNaN(rate))) {
-      const label = cleanerName || cleanerId || "unknown";
-      missingCleaners.add(label);
-      continue;
-    }
+    if (!Number.isFinite(hours) || hours <= 0) continue;
+
+    const { id: siteIdRaw } = getLookupIdOrName(f, "Site");
+    if (!siteIdRaw) continue;
+    const siteId = sharepoint.normalizeListItemId(siteIdRaw);
+    const siteRates = siteRateInfoMap[siteId];
+    if (!siteRates) continue;
+
+    const phSet = getPhSetForState(siteRates.stateCode);
+    const rate = getSiteRateForDate(
+      workDate,
+      siteRates.weekdayRate,
+      siteRates.saturdayRate,
+      siteRates.sundayRate,
+      siteRates.phRate,
+      phSet
+    );
     labor += hours * rate;
   }
 
-  if (missingCleaners.size > 0) {
-    return {
-      labor,
-      error: `Missing Pay Rate for cleaner(s): ${[...missingCleaners].join(", ")}. Ensure CleanTrack Cleaners has Pay Rate and Active=Yes.`,
-    };
-  }
   return { labor };
 }
 
@@ -225,12 +292,10 @@ export async function getTimesheetEntriesForRange(
 ): Promise<TimesheetEntryFlat[]> {
   const siteId = await sharepoint.getSiteId(accessToken);
   const timesheetsListId = await sharepoint.getListIdByName(accessToken, siteId, TIMESHEETS_LIST_NAME);
-  const cleanersListId = await sharepoint.getListIdByName(accessToken, siteId, CLEANERS_LIST_NAME);
   if (!timesheetsListId) return [];
 
-  const [timesheetItems, cleanerItems, timesheetColumns] = await Promise.all([
+  const [timesheetItems, timesheetColumns] = await Promise.all([
     sharepoint.getListItems(accessToken, siteId, timesheetsListId),
-    cleanersListId ? sharepoint.getListItems(accessToken, siteId, cleanersListId) : [],
     sharepoint.getListColumns(accessToken, siteId, timesheetsListId),
   ]);
 
@@ -244,22 +309,6 @@ export async function getTimesheetEntriesForRange(
   const adHocJobCol = tsMap["Ad Hoc Job"] ?? "Ad_x0020_Hoc_x0020_Job";
   const adHocJobIdKey = `${adHocJobCol}LookupId`;
   const adHocJobNameKey = adHocJobCol;
-
-  const cleanerRateMap: Record<string, number> = {};
-  if (cleanerItems.length > 0) {
-    const nameKey = Object.keys(cleanerItems[0].fields ?? {}).find(
-      (k) => k === "Cleaner Name" || k.toLowerCase() === "cleaner name"
-    ) ?? "Cleaner Name";
-    const payRateKey = Object.keys(cleanerItems[0].fields ?? {}).find(
-      (k) => k === "Pay Rate" || k.toLowerCase() === "pay rate"
-    ) ?? "Pay Rate";
-    for (const item of cleanerItems) {
-      const f = item.fields ?? {};
-      if (!isActive(f)) continue;
-      const rate = toNum(f[payRateKey]);
-      if (item.id) cleanerRateMap[item.id] = rate;
-    }
-  }
 
   const workDateKey = workDateInternal;
   const hoursKey = hoursInternal;
@@ -279,7 +328,6 @@ export async function getTimesheetEntriesForRange(
     // Normalize lookup ids so they match app-level site.id / cleaner.id (Graph may return path-style ids).
     const siteIdVal = siteIdRaw ? sharepoint.normalizeListItemId(siteIdRaw) : "";
     const cleanerIdVal = sharepoint.normalizeListItemId(cleanerIdRaw);
-    const rate = cleanerRateMap[cleanerIdVal] ?? 0;
     // Normalize Work Date to YYYY-MM-DD.
     // IMPORTANT: avoid Date.toISOString() here because it can shift the day (timezone).
     // Graph may return ISO strings ("2026-03-09T00:00:00Z") or locale-ish strings ("3/9/2026").
@@ -305,7 +353,6 @@ export async function getTimesheetEntriesForRange(
       ...(siteIdVal ? { siteId: siteIdVal } : {}),
       siteName: siteNameRaw || undefined,
       cleanerName: cleanerNameRaw || undefined,
-      pay_rate_snapshot: rate || undefined,
       ...(adhocJobIdVal
         ? { adhocJobId: adhocJobIdVal, adhocJobName: adhocJobNameVal || undefined }
         : {}),
@@ -316,6 +363,77 @@ export async function getTimesheetEntriesForRange(
     console.log("[CleanTrack Timesheet Entries] range count:", result.length, "with Ad Hoc Job:", withAdHoc.length, "sample:", result[0]);
   }
   return result;
+}
+
+/**
+ * Delete every timesheet list item whose Work Date falls in [range.start, range.end) (local YMD string compare).
+ * Used for admin-only “clear entire portfolio for this fortnight”.
+ */
+export async function deleteAllTimesheetEntriesInRange(
+  accessToken: string,
+  range: DateRange
+): Promise<{ deleted: number; error?: string }> {
+  const siteId = await sharepoint.getSiteId(accessToken);
+  const listId = await sharepoint.getListIdByName(accessToken, siteId, TIMESHEETS_LIST_NAME);
+  if (!listId) {
+    return { deleted: 0, error: "CleanTrack Timesheet Entries list not found." };
+  }
+
+  const timesheetColumns = await sharepoint.getListColumns(accessToken, siteId, listId);
+  const tsMap: Record<string, string> = {};
+  for (const c of timesheetColumns) {
+    if (c.displayName) tsMap[c.displayName] = c.name;
+  }
+  const workDateKey = tsMap["Work Date"] ?? "WorkDate" ?? "Work_x0020_Date";
+
+  const timesheetItems = await sharepoint.getListItems(accessToken, siteId, listId);
+  const startYmd = toLocalYmd(range.start);
+  const endYmdExclusive = toLocalYmd(range.end);
+  const toDelete: string[] = [];
+
+  for (const item of timesheetItems) {
+    const f = (item.fields ?? {}) as Record<string, unknown>;
+    const rawWorkDate = f[workDateKey] ?? f["WorkDate"];
+    const workDate = toDate(rawWorkDate);
+    if (!workDate) continue;
+    const dateStr =
+      typeof rawWorkDate === "string" && /^\d{4}-\d{2}-\d{2}/.test(String(rawWorkDate))
+        ? String(rawWorkDate).slice(0, 10)
+        : toLocalYmd(workDate);
+    if (dateStr < startYmd || dateStr >= endYmdExclusive) continue;
+    if (item.id) toDelete.push(item.id);
+  }
+
+  if (toDelete.length === 0) return { deleted: 0 };
+
+  let deleted = 0;
+  const errors: string[] = [];
+  try {
+    let batchIdx = 0;
+    for (let i = 0; i < toDelete.length; i += 20) {
+      const chunk = toDelete.slice(i, i + 20);
+      const reqs = chunk.map((id, j) => ({
+        id: `del-all-${batchIdx}-${j}`,
+        method: "DELETE" as const,
+        url: `/sites/${siteId}/lists/${listId}/items/${id}`,
+      }));
+      const res = await sharepoint.graphBatch(accessToken, reqs);
+      for (const r of res) {
+        if (r.status >= 400) {
+          errors.push(`[Timesheet bulk delete] status=${r.status}`);
+        } else {
+          deleted++;
+        }
+      }
+      batchIdx++;
+    }
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e);
+    return { deleted, error: msg };
+  }
+
+  if (errors.length > 0) return { deleted, error: errors.join(" | ") };
+  return { deleted };
 }
 
 /** Payload for one timesheet row (site + cleaner + date + hours; optional ad hoc job). */
@@ -518,20 +636,17 @@ export async function getDashboardMetrics(
     const siteId = await sharepoint.getSiteId(accessToken);
 
     const sitesListId = await sharepoint.getListIdByName(accessToken, siteId, SITES_LIST_NAME);
-    const cleanersListId = await sharepoint.getListIdByName(accessToken, siteId, CLEANERS_LIST_NAME);
     const timesheetsListId = await sharepoint.getListIdByName(accessToken, siteId, TIMESHEETS_LIST_NAME);
 
-    if (!sitesListId || !cleanersListId || !timesheetsListId) {
+    if (!sitesListId || !timesheetsListId) {
       const missing = [];
       if (!sitesListId) missing.push("CleanTrack Sites");
-      if (!cleanersListId) missing.push("CleanTrack Cleaners");
       if (!timesheetsListId) missing.push("CleanTrack Timesheet Entries");
       return { metrics: zeros, error: `Lists not found: ${missing.join(", ")}.` };
     }
 
-    const [siteItems, cleanerItems, timesheetItems] = await Promise.all([
+    const [siteItems, timesheetItems] = await Promise.all([
       sharepoint.getListItems(accessToken, siteId, sitesListId),
-      sharepoint.getListItems(accessToken, siteId, cleanersListId),
       sharepoint.getListItems(accessToken, siteId, timesheetsListId),
     ]);
 
@@ -558,8 +673,41 @@ export async function getDashboardMetrics(
 
     const portfolioRevenue = computePortfolioRevenue(siteItemsForRevenue, range);
 
-    const cleanerRateMap = buildCleanerRateMap(cleanerItems);
-    const laborResult = computeLaborExpenses(timesheetItemsForLabor, cleanerRateMap, range);
+    const budgets = await getSiteBudgets(accessToken).catch(() => ({} as Record<string, any>));
+    const siteRateInfoMap: Record<string, SiteRateInfo> = {};
+    for (const item of siteItemsForRevenue) {
+      const id = item.id ? sharepoint.normalizeListItemId(item.id) : "";
+      if (!id) continue;
+      const f = (item.fields ?? {}) as Record<string, unknown>;
+
+      const stateCode = coerceAustralianStateCode(
+        (f["State"] ?? f["state"] ?? f["Address"] ?? f["address"] ?? "") as unknown
+      );
+
+      const budget =
+        budgets[id] ??
+        budgets[`name:${String(f["Site Name"] ?? f["Title"] ?? "").trim() + " Budget"}`] ??
+        undefined;
+
+      const weekdayRate = budget?.weekdayLabourRate ?? budget?.budgetLabourRate ?? 0;
+      const saturdayRate = budget?.saturdayLabourRate ?? weekdayRate;
+      const sundayRate = budget?.sundayLabourRate ?? weekdayRate;
+      const phRate = budget?.phLabourRate ?? weekdayRate;
+
+      siteRateInfoMap[id] = {
+        weekdayRate,
+        saturdayRate,
+        sundayRate,
+        phRate,
+        stateCode,
+      };
+    }
+
+    const laborResult = computeLaborExpensesFromSiteBudgets(
+      timesheetItemsForLabor,
+      siteRateInfoMap,
+      range
+    );
     const laborExpenses = laborResult.labor;
 
     const netGrossProfit = portfolioRevenue - laborExpenses;

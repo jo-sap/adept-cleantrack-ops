@@ -4,7 +4,7 @@
  */
 import React, { useState, useEffect, useCallback, useMemo, useRef } from "react";
 import { AdHocJob } from "../types";
-import { Plus, X, Loader2, Pencil, AlertCircle, Upload, FileText, Trash2, FileSpreadsheet } from "lucide-react";
+import { Plus, X, Loader2, Pencil, AlertCircle, Upload, FileText, Trash2, FileSpreadsheet, ChevronUp, ChevronDown } from "lucide-react";
 import { useRole } from "../contexts/RoleContext";
 import { useAppAuth } from "../contexts/AppAuthContext";
 import { getGraphAccessToken } from "../lib/graph";
@@ -86,6 +86,73 @@ export default function AdHocJobsManager() {
     (job: AdHocJob) => resolveAdHocJobNameTemplate(job.jobName, listMonthDate) || job.jobName || "—",
     [listMonthDate]
   );
+
+  type AdHocSortKey =
+    | "jobName"
+    | "schedule"
+    | "manager"
+    | "scheduled"
+    | "completed"
+    | "status"
+    | "charge"
+    | "cost"
+    | "gp";
+  const [adHocSortBy, setAdHocSortBy] = useState<AdHocSortKey>("jobName");
+  const [adHocSortDir, setAdHocSortDir] = useState<"asc" | "desc">("asc");
+
+  const sortedJobs = useMemo(() => {
+    const list = [...jobs];
+    list.sort((a, b) => {
+      let cmp = 0;
+
+      const strCmp = (x: string, y: string) => x.localeCompare(y, undefined, { sensitivity: "base" });
+
+      if (adHocSortBy === "jobName") {
+        cmp = strCmp(getDisplayJobName(a).toLowerCase(), getDisplayJobName(b).toLowerCase());
+      } else if (adHocSortBy === "schedule") {
+        cmp = strCmp(scheduleTypeLabel(a.jobType).toLowerCase(), scheduleTypeLabel(b.jobType).toLowerCase());
+      } else if (adHocSortBy === "manager") {
+        cmp = strCmp((a.assignedManagerName || "").toLowerCase(), (b.assignedManagerName || "").toLowerCase());
+      } else if (adHocSortBy === "scheduled" || adHocSortBy === "completed") {
+        const key = adHocSortBy === "scheduled" ? "scheduledDate" : "completedDate";
+        const isoA = a[key as keyof AdHocJob] as string | null | undefined;
+        const isoB = b[key as keyof AdHocJob] as string | null | undefined;
+        const tA = isoA ? new Date(isoA).getTime() : NaN;
+        const tB = isoB ? new Date(isoB).getTime() : NaN;
+        const validA = Number.isFinite(tA);
+        const validB = Number.isFinite(tB);
+        if (!validA && !validB) cmp = 0;
+        else if (!validA) cmp = 1;
+        else if (!validB) cmp = -1;
+        else cmp = tA - tB;
+      } else if (adHocSortBy === "status") {
+        cmp = strCmp((a.status || "").toLowerCase(), (b.status || "").toLowerCase());
+      } else if (adHocSortBy === "charge" || adHocSortBy === "cost" || adHocSortBy === "gp") {
+        const field = adHocSortBy === "charge" ? "charge" : adHocSortBy === "cost" ? "cost" : "grossProfit";
+        const na = a[field] != null ? Number(a[field]) : NaN;
+        const nb = b[field] != null ? Number(b[field]) : NaN;
+        const validA = Number.isFinite(na);
+        const validB = Number.isFinite(nb);
+        if (!validA && !validB) cmp = 0;
+        else if (!validA) cmp = 1;
+        else if (!validB) cmp = -1;
+        else cmp = na - nb;
+      }
+
+      return adHocSortDir === "asc" ? cmp : -cmp;
+    });
+    return list;
+  }, [jobs, adHocSortBy, adHocSortDir, getDisplayJobName]);
+
+  const handleAdHocSort = useCallback((key: AdHocSortKey) => {
+    if (adHocSortBy === key) {
+      setAdHocSortDir((d) => (d === "asc" ? "desc" : "asc"));
+    } else {
+      setAdHocSortBy(key);
+      const isNumeric = key === "charge" || key === "cost" || key === "gp";
+      setAdHocSortDir(isNumeric ? "desc" : "asc");
+    }
+  }, [adHocSortBy]);
 
   const showToast = useCallback((msg: string) => {
     setToast(msg);
@@ -249,7 +316,7 @@ export default function AdHocJobsManager() {
         <div className="flex flex-col sm:flex-row sm:items-center gap-2">
           <button
             type="button"
-            onClick={() => exportAdHocJobsToSpreadsheet(jobs, filterMonth)}
+            onClick={() => exportAdHocJobsToSpreadsheet(sortedJobs, filterMonth)}
             className="w-full sm:w-auto justify-center flex items-center gap-1.5 px-4 py-2.5 bg-green-50 text-green-700 border border-green-200 rounded-lg text-sm font-bold hover:bg-green-100 transition-colors"
           >
             <FileSpreadsheet size={18} />
@@ -290,7 +357,7 @@ export default function AdHocJobsManager() {
       ) : (
         <>
         <div className="md:hidden space-y-2">
-          {jobs.map((j) => {
+          {sortedJobs.map((j) => {
             const canDelete =
               isAdmin ||
               (currentUserId &&
@@ -354,20 +421,103 @@ export default function AdHocJobsManager() {
           <table className="w-full min-w-[920px] border-collapse text-left table-fixed">
             <thead>
               <tr className="bg-[#fcfcfb] border-b border-[#edeef0]">
-                <th className="w-[21%] px-2 py-2 text-[9px] font-bold text-gray-500 uppercase tracking-widest text-left">Job Name</th>
-                <th className="w-[10%] px-2 py-2 text-[9px] font-bold text-gray-500 uppercase tracking-widest">Schedule</th>
-                <th className="w-[15%] px-2 py-2 text-[9px] font-bold text-gray-500 uppercase tracking-widest">Manager</th>
-                <th className="w-[10%] px-2 py-2 text-[9px] font-bold text-gray-500 uppercase tracking-widest">Scheduled</th>
-                <th className="w-[10%] px-2 py-2 text-[9px] font-bold text-gray-500 uppercase tracking-widest">Completed</th>
-                <th className="w-[10%] px-2 py-2 text-[9px] font-bold text-gray-500 uppercase tracking-widest">Status</th>
-                <th className="w-[8%] px-2 py-2 text-[9px] font-bold text-gray-500 uppercase tracking-widest">Charge</th>
-                <th className="w-[7%] px-2 py-2 text-[9px] font-bold text-gray-500 uppercase tracking-widest">Cost</th>
-                <th className="w-[9%] px-2 py-2 text-[9px] font-bold text-gray-500 uppercase tracking-widest">GP</th>
-                <th className="w-[10%] px-2 py-2 text-[9px] font-bold text-gray-500 uppercase tracking-widest">Actions</th>
+                <th className="w-[21%] px-2 py-2 text-left align-middle">
+                  <button
+                    type="button"
+                    onClick={() => handleAdHocSort("jobName")}
+                    className="text-[9px] font-bold text-gray-500 uppercase tracking-widest inline-flex items-center gap-0.5 hover:text-gray-800 focus:outline-none focus:ring-2 focus:ring-gray-900/20 rounded"
+                  >
+                    Job Name
+                    {adHocSortBy === "jobName" && (adHocSortDir === "asc" ? <ChevronUp size={12} className="shrink-0" /> : <ChevronDown size={12} className="shrink-0" />)}
+                  </button>
+                </th>
+                <th className="w-[10%] px-2 py-2 align-middle">
+                  <button
+                    type="button"
+                    onClick={() => handleAdHocSort("schedule")}
+                    className="text-[9px] font-bold text-gray-500 uppercase tracking-widest inline-flex items-center gap-0.5 hover:text-gray-800 focus:outline-none focus:ring-2 focus:ring-gray-900/20 rounded"
+                  >
+                    Schedule
+                    {adHocSortBy === "schedule" && (adHocSortDir === "asc" ? <ChevronUp size={12} className="shrink-0" /> : <ChevronDown size={12} className="shrink-0" />)}
+                  </button>
+                </th>
+                <th className="w-[15%] px-2 py-2 align-middle">
+                  <button
+                    type="button"
+                    onClick={() => handleAdHocSort("manager")}
+                    className="text-[9px] font-bold text-gray-500 uppercase tracking-widest inline-flex items-center gap-0.5 hover:text-gray-800 focus:outline-none focus:ring-2 focus:ring-gray-900/20 rounded"
+                  >
+                    Manager
+                    {adHocSortBy === "manager" && (adHocSortDir === "asc" ? <ChevronUp size={12} className="shrink-0" /> : <ChevronDown size={12} className="shrink-0" />)}
+                  </button>
+                </th>
+                <th className="w-[10%] px-2 py-2 align-middle">
+                  <button
+                    type="button"
+                    onClick={() => handleAdHocSort("scheduled")}
+                    className="text-[9px] font-bold text-gray-500 uppercase tracking-widest inline-flex items-center gap-0.5 hover:text-gray-800 focus:outline-none focus:ring-2 focus:ring-gray-900/20 rounded"
+                  >
+                    Scheduled
+                    {adHocSortBy === "scheduled" && (adHocSortDir === "asc" ? <ChevronUp size={12} className="shrink-0" /> : <ChevronDown size={12} className="shrink-0" />)}
+                  </button>
+                </th>
+                <th className="w-[10%] px-2 py-2 align-middle">
+                  <button
+                    type="button"
+                    onClick={() => handleAdHocSort("completed")}
+                    className="text-[9px] font-bold text-gray-500 uppercase tracking-widest inline-flex items-center gap-0.5 hover:text-gray-800 focus:outline-none focus:ring-2 focus:ring-gray-900/20 rounded"
+                  >
+                    Completed
+                    {adHocSortBy === "completed" && (adHocSortDir === "asc" ? <ChevronUp size={12} className="shrink-0" /> : <ChevronDown size={12} className="shrink-0" />)}
+                  </button>
+                </th>
+                <th className="w-[10%] px-2 py-2 align-middle">
+                  <button
+                    type="button"
+                    onClick={() => handleAdHocSort("status")}
+                    className="text-[9px] font-bold text-gray-500 uppercase tracking-widest inline-flex items-center gap-0.5 hover:text-gray-800 focus:outline-none focus:ring-2 focus:ring-gray-900/20 rounded"
+                  >
+                    Status
+                    {adHocSortBy === "status" && (adHocSortDir === "asc" ? <ChevronUp size={12} className="shrink-0" /> : <ChevronDown size={12} className="shrink-0" />)}
+                  </button>
+                </th>
+                <th className="w-[8%] px-2 py-2 align-middle">
+                  <button
+                    type="button"
+                    onClick={() => handleAdHocSort("charge")}
+                    className="text-[9px] font-bold text-gray-500 uppercase tracking-widest inline-flex items-center gap-0.5 hover:text-gray-800 focus:outline-none focus:ring-2 focus:ring-gray-900/20 rounded"
+                  >
+                    Charge
+                    {adHocSortBy === "charge" && (adHocSortDir === "asc" ? <ChevronUp size={12} className="shrink-0" /> : <ChevronDown size={12} className="shrink-0" />)}
+                  </button>
+                </th>
+                <th className="w-[7%] px-2 py-2 align-middle">
+                  <button
+                    type="button"
+                    onClick={() => handleAdHocSort("cost")}
+                    className="text-[9px] font-bold text-gray-500 uppercase tracking-widest inline-flex items-center gap-0.5 hover:text-gray-800 focus:outline-none focus:ring-2 focus:ring-gray-900/20 rounded"
+                  >
+                    Cost
+                    {adHocSortBy === "cost" && (adHocSortDir === "asc" ? <ChevronUp size={12} className="shrink-0" /> : <ChevronDown size={12} className="shrink-0" />)}
+                  </button>
+                </th>
+                <th className="w-[9%] px-2 py-2 align-middle">
+                  <button
+                    type="button"
+                    onClick={() => handleAdHocSort("gp")}
+                    className="text-[9px] font-bold text-gray-500 uppercase tracking-widest inline-flex items-center gap-0.5 hover:text-gray-800 focus:outline-none focus:ring-2 focus:ring-gray-900/20 rounded"
+                  >
+                    GP
+                    {adHocSortBy === "gp" && (adHocSortDir === "asc" ? <ChevronUp size={12} className="shrink-0" /> : <ChevronDown size={12} className="shrink-0" />)}
+                  </button>
+                </th>
+                <th className="w-[10%] px-2 py-2 text-[9px] font-bold text-gray-500 uppercase tracking-widest align-middle">
+                  Actions
+                </th>
               </tr>
             </thead>
             <tbody className="divide-y divide-[#edeef0]">
-              {jobs.map((j) => {
+              {sortedJobs.map((j) => {
                 const canDelete =
                   isAdmin ||
                   (currentUserId &&
@@ -748,7 +898,16 @@ function AdHocJobFormModal({
    * - We never generate occurrences before the later of Start Date and start of the current month.
    */
   const computeRecurringTotals = useCallback(
-    (payload: AdHocJobPayload): { charge: number; cost: number; grossProfit: number; markupPercent: number | null; gpPercent: number | null } | null => {
+    (
+      payload: AdHocJobPayload
+    ): {
+      units: number;
+      charge: number;
+      cost: number;
+      grossProfit: number;
+      markupPercent: number | null;
+      gpPercent: number | null;
+    } | null => {
       if (!payload.scheduledDate || !payload.recurrenceFrequency) return null;
       const startDate = new Date(payload.scheduledDate);
       if (isNaN(startDate.getTime())) return null;
@@ -773,12 +932,13 @@ function AdHocJobFormModal({
       const synthetic = formToSyntheticJob(payload);
       const phSet = getPublicHolidaysInRange(previewStart, previewEnd);
       const occurrences = generateAdHocOccurrencesForRange(synthetic, previewStart, previewEnd, phSet);
+      const units = occurrences.reduce((sum, o) => sum + o.hours, 0);
       const charge = occurrences.reduce((sum, o) => sum + o.chargeTotal, 0);
       const cost = occurrences.reduce((sum, o) => sum + o.costTotal, 0);
       const grossProfit = charge - cost;
       const markupPercent = cost > 0 ? (grossProfit / cost) * 100 : null;
       const gpPercent = charge > 0 ? (grossProfit / charge) * 100 : null;
-      return { charge, cost, grossProfit, markupPercent, gpPercent };
+      return { units, charge, cost, grossProfit, markupPercent, gpPercent };
     },
     [formToSyntheticJob, filterMonth]
   );
@@ -1699,6 +1859,16 @@ function AdHocJobFormModal({
             </div>
           )}
           <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+            {field("Units", "units", (
+              <input
+                id="units"
+                type="text"
+                inputMode="decimal"
+                value={fmt2(isRecurring ? recurringTotals?.units : form.budgetedHours)}
+                readOnly
+                className="w-full border border-[#edeef0] rounded-lg px-3 py-2 text-sm bg-gray-50"
+              />
+            ))}
             {field("Charge ($)", "charge", (
               <input
                 id="charge"
@@ -1719,20 +1889,6 @@ function AdHocJobFormModal({
                 className="w-full border border-[#edeef0] rounded-lg px-3 py-2 text-sm bg-gray-50"
               />
             ))}
-            {isAdmin ? (
-              field("Gross Profit ($)", "gp", (
-                <input
-                  id="gp"
-                  type="text"
-                  inputMode="decimal"
-                  value={fmt2(isRecurring && recurringTotals ? recurringTotals.grossProfit : form.grossProfit)}
-                  readOnly
-                  className="w-full border border-[#edeef0] rounded-lg px-3 py-2 text-sm bg-gray-50"
-                />
-              ))
-            ) : (
-              <div />
-            )}
           </div>
           {isAdmin && (
             <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
@@ -1752,6 +1908,16 @@ function AdHocJobFormModal({
                   type="text"
                   inputMode="decimal"
                   value={fmt2(isRecurring && recurringTotals ? recurringTotals.gpPercent : form.gpPercent)}
+                  readOnly
+                  className="w-full border border-[#edeef0] rounded-lg px-3 py-2 text-sm bg-gray-50"
+                />
+              ))}
+              {field("Gross Profit ($)", "gp", (
+                <input
+                  id="gp"
+                  type="text"
+                  inputMode="decimal"
+                  value={fmt2(isRecurring && recurringTotals ? recurringTotals.grossProfit : form.grossProfit)}
                   readOnly
                   className="w-full border border-[#edeef0] rounded-lg px-3 py-2 text-sm bg-gray-50"
                 />

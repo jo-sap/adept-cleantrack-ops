@@ -531,3 +531,128 @@ export async function upsertTimesheetPeriodNote(
     return { ok: false, error: msg };
   }
 }
+
+export interface ClearAllTimesheetNotesParams {
+  periodStartYmd: string;
+  /** Real site id; empty when only name/tag matching applies (e.g. some ad hoc rows). */
+  siteId: string;
+  siteDisplayName: string;
+  /** When set, delete notes for this ad hoc job (tag + name fallback). When null/undefined, delete contract notes only (excludes ad hoc–tagged rows). */
+  adhocJobId?: string | null;
+}
+
+/**
+ * Deletes every Timesheet Period Notes row for this fortnight and scope: either all contract notes
+ * for the site (site-wide + per-cleaner) or all notes tied to an ad hoc job tag for that period.
+ */
+export async function deleteTimesheetPeriodNotesForClearAllScope(
+  accessToken: string,
+  params: ClearAllTimesheetNotesParams
+): Promise<{ ok: true; deleted: number } | { ok: false; error: string }> {
+  const spSiteId = await sharepoint.getSiteId(accessToken);
+  const listId = await sharepoint.getListIdByName(accessToken, spSiteId, LIST_NAME);
+  if (!listId) {
+    return { ok: false, error: `SharePoint list "${LIST_NAME}" was not found.` };
+  }
+
+  const keys = await resolveNoteListKeys(accessToken, spSiteId, listId);
+  if (keys.listSchemaError) {
+    return { ok: false, error: keys.listSchemaError };
+  }
+
+  const period = comparablePeriodYmd(params.periodStartYmd);
+  const inputSiteLabel = normalizeSiteLabelForNotes(params.siteDisplayName);
+  const normSite = params.siteId ? sharepoint.normalizeListItemId(params.siteId) : "";
+  const adhocJobNorm = params.adhocJobId
+    ? sharepoint.normalizeListItemId(params.adhocJobId)
+    : "";
+  const wantAdhocTag = adhocJobNorm
+    ? `adhocjob:${adhocJobNorm}`.toLowerCase()
+    : "";
+
+  const items = await sharepoint.getListItems(accessToken, spSiteId, listId);
+  const toDelete: string[] = [];
+
+  for (const item of items) {
+    const n = parseItem(item, keys);
+    if (!n) continue;
+    if (comparablePeriodYmd(n.periodStartYmd) !== period) continue;
+
+    const noteTagsNorm = (n.tags ?? []).map((t) => String(t ?? "").trim().toLowerCase()).filter(Boolean);
+
+    if (wantAdhocTag) {
+      const tagMatch = noteTagsNorm.includes(wantAdhocTag);
+      const nameFallbackMatch =
+        !!inputSiteLabel &&
+        normalizeSiteLabelForNotes(n.siteLookupName) === inputSiteLabel;
+      if (!tagMatch && !nameFallbackMatch) continue;
+    } else {
+      const hasAdhocTag = noteTagsNorm.some((t) => t.startsWith("adhocjob:"));
+      if (hasAdhocTag) continue;
+
+      const nSid = n.siteId ? sharepoint.normalizeListItemId(n.siteId) : "";
+      const idMatch = !!normSite && !!nSid && nSid === normSite;
+      const nameOnlyMatch =
+        !nSid &&
+        !!inputSiteLabel &&
+        normalizeSiteLabelForNotes(n.siteLookupName) === inputSiteLabel;
+      if (!idMatch && !nameOnlyMatch) continue;
+    }
+
+    if (item.id) toDelete.push(item.id);
+  }
+
+  let deleted = 0;
+  for (const id of toDelete) {
+    try {
+      await sharepoint.deleteListItem(accessToken, spSiteId, listId, id);
+      deleted++;
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      return { ok: false, error: msg };
+    }
+  }
+
+  return { ok: true, deleted };
+}
+
+/** Delete every Timesheet Period Notes row for this pay fortnight (all sites / jobs). Admin-only bulk clear. */
+export async function deleteAllTimesheetPeriodNotesForFortnight(
+  accessToken: string,
+  periodStartYmd: string
+): Promise<{ ok: true; deleted: number } | { ok: false; error: string }> {
+  const spSiteId = await sharepoint.getSiteId(accessToken);
+  const listId = await sharepoint.getListIdByName(accessToken, spSiteId, LIST_NAME);
+  if (!listId) {
+    return { ok: false, error: `SharePoint list "${LIST_NAME}" was not found.` };
+  }
+
+  const keys = await resolveNoteListKeys(accessToken, spSiteId, listId);
+  if (keys.listSchemaError) {
+    return { ok: false, error: keys.listSchemaError };
+  }
+
+  const want = comparablePeriodYmd(periodStartYmd);
+  const items = await sharepoint.getListItems(accessToken, spSiteId, listId);
+  const toDelete: string[] = [];
+
+  for (const item of items) {
+    const n = parseItem(item, keys);
+    if (!n) continue;
+    if (comparablePeriodYmd(n.periodStartYmd) !== want) continue;
+    if (item.id) toDelete.push(item.id);
+  }
+
+  let deleted = 0;
+  for (const id of toDelete) {
+    try {
+      await sharepoint.deleteListItem(accessToken, spSiteId, listId, id);
+      deleted++;
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      return { ok: false, error: msg };
+    }
+  }
+
+  return { ok: true, deleted };
+}

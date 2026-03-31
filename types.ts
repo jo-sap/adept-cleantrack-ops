@@ -78,7 +78,6 @@ export interface Cleaner {
   bankAccountName: string;
   bankBsb: string;
   bankAccountNumber: string;
-  payRatePerHour: number;
   /** Workforce classification. */
   type?: "cleaner" | "contractor";
 }

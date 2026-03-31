@@ -101,7 +101,6 @@ const AppContent: FC = () => {
         batch_id: e.id,
         date: e.date,
         hours: e.hours,
-        pay_rate_snapshot: e.pay_rate_snapshot,
         siteId,
         cleanerId,
         adhocJobId: e.adhocJobId,
@@ -207,7 +206,6 @@ const AppContent: FC = () => {
           bankAccountName: c.accountName,
           bankBsb: c.bsb,
           bankAccountNumber: c.accountNumber,
-          payRatePerHour: c.payRatePerHour,
         } as Cleaner;
       })
     );
@@ -215,8 +213,8 @@ const AppContent: FC = () => {
 
   if (loading && !DEV_BYPASS_LOGIN && !isAppAuthenticated) return <div className="h-screen flex items-center justify-center bg-gray-50"><Loader2 className="animate-spin text-gray-400" /></div>;
 
-  const handleSaveBatchEntries = async (newEntries: Omit<TimeEntry, 'id'>[]) => {
-    if (newEntries.length === 0) return;
+  const handleSaveBatchEntries = async (newEntries: Omit<TimeEntry, 'id'>[]): Promise<boolean> => {
+    if (newEntries.length === 0) return false;
     const token = await getGraphAccessToken();
     const range = {
       start: currentPeriod.startDate,
@@ -234,7 +232,7 @@ const AppContent: FC = () => {
       const result = await saveTimesheetEntriesToSharePoint(token, range, payload);
       if (result.error) {
         alert(result.error);
-        return;
+        return false;
       }
       // 1. Optimistic update: merge the batch we just saved into state so the UI shows saved hours immediately
       //    (avoids refetch returning before SharePoint has the new items and wiping the form to zeros)
@@ -246,7 +244,6 @@ const AppContent: FC = () => {
         siteId: p.siteId,
         cleanerId: p.cleanerId,
         adhocJobId: (p as any).adhocJobId ?? undefined,
-        pay_rate_snapshot: (newEntries[i] as any).pay_rate_snapshot,
       } as TimeEntry));
       setGraphEntries((prev) => {
         const byKey = new Map<string, TimeEntry>();
@@ -272,11 +269,24 @@ const AppContent: FC = () => {
           });
         })
         .catch(() => {});
-      return;
+      return true;
     }
 
     alert('Save failed. Sign in with Microsoft to save timesheets.');
+    return false;
   };
+
+  const refreshTimesheetsFromServer = React.useCallback(async () => {
+    const token = await getGraphAccessToken();
+    if (!token) return;
+    try {
+      const entriesFromServer = await getTimesheetEntriesForRange(token, timesheetFetchRange);
+      setGraphEntries(entriesFromServer.map((e) => mapFlatEntryToAppEntry(e)));
+      setGraphEntriesLoaded(true);
+    } catch {
+      /* keep existing state */
+    }
+  }, [timesheetFetchRange, mapFlatEntryToAppEntry]);
 
   const renderContent = () => {
     const entries = graphEntriesLoaded ? graphEntries : [];
@@ -297,7 +307,18 @@ const AppContent: FC = () => {
           />
         );
       case 'timesheets':
-        return <TimeEntryForm sites={sites} cleaners={cleaners} entries={entries as any} currentPeriod={currentPeriod} onSaveBatch={handleSaveBatchEntries} onDeleteEntry={() => {}} onUpdateSite={fetchSites} />;
+        return (
+          <TimeEntryForm
+            sites={sites}
+            cleaners={cleaners}
+            entries={entries as any}
+            currentPeriod={currentPeriod}
+            onSaveBatch={handleSaveBatchEntries}
+            onDeleteEntry={() => {}}
+            onUpdateSite={fetchSites}
+            onTimesheetsFortnightRefresh={refreshTimesheetsFromServer}
+          />
+        );
       case 'sites':
         return (
           <SiteManager

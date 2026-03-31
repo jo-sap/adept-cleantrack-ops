@@ -10,6 +10,8 @@ import { getGraphAccessToken } from '../lib/graph';
 import { createSiteCleanerAssignment, getSiteCleanerAssignments, updateSiteCleanerAssignment } from '../repositories/assignedCleanersRepo';
 import { listAllTimesheetPeriodNotes, pickSiteNoteForPeriod } from '../repositories/timesheetNotesRepo';
 import { nthWeekdayOfMonth } from '../utils';
+import { getSiteRateForDate } from '../lib/budgetedLabourCost';
+import { getPublicHolidaysInRange } from '../lib/publicHolidays';
 
 interface SiteDetailProps {
   site: Site;
@@ -114,9 +116,22 @@ const SiteDetail: React.FC<SiteDetailProps> = ({ site, cleaners, entries, curren
 
   const financialStats = useMemo(() => {
     let actualLaborCost = 0;
+    const weekdayRate = site.budget_weekday_labour_rate ?? site.budget_labour_rate ?? 0;
+    const saturdayRate = site.budget_saturday_labour_rate ?? weekdayRate;
+    const sundayRate = site.budget_sunday_labour_rate ?? weekdayRate;
+    const phRate = site.budget_ph_labour_rate ?? weekdayRate;
+    const phInPeriod = getPublicHolidaysInRange(currentPeriod.startDate, currentPeriod.endDate);
     periodEntries.forEach(e => {
-      const cleaner = cleaners.find(c => c.id === e.cleanerId);
-      const rate = e.pay_rate_snapshot ?? cleaner?.payRatePerHour ?? 0;
+      // Use the site's budgeted $/hr by day type (PH / Sat / Sun / Weekday) for ALL hours.
+      // This intentionally does not use cleaner pay rate.
+      const rate = getSiteRateForDate(
+        new Date(e.date),
+        weekdayRate,
+        saturdayRate,
+        sundayRate,
+        phRate,
+        phInPeriod
+      );
       actualLaborCost += e.hours * rate;
     });
 
@@ -125,7 +140,7 @@ const SiteDetail: React.FC<SiteDetailProps> = ({ site, cleaners, entries, curren
     const margin = fortnightRevenue > 0 ? (grossProfit / fortnightRevenue) * 100 : 0;
 
     return { actualLaborCost, fortnightRevenue, grossProfit, margin };
-  }, [periodEntries, cleaners, site]);
+  }, [periodEntries, site, currentPeriod.startDate, currentPeriod.endDate]);
 
   const dailyBudgetsArr = (site as any).daily_budgets ?? (site as any).dailyBudgets ?? [];
   const dailyBudgetsWeek2Arr = (site as any).daily_budgets_week2 ?? (site as any).dailyBudgetsWeek2 ?? [];

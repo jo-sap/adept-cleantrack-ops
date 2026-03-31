@@ -36,7 +36,6 @@ function toAppCleaner(c: CleanerItem): Cleaner {
     bankAccountName: c.accountName,
     bankBsb: c.bsb,
     bankAccountNumber: c.accountNumber,
-    payRatePerHour: c.payRatePerHour,
     type: c.type ?? "cleaner",
   };
 }
@@ -50,7 +49,6 @@ interface BulkCleanerRow {
   id: string;
   cleanerName: string;
   type: "cleaner" | "contractor";
-  payRatePerHour: number | "";
   accountName: string;
   bsb: string;
   accountNumber: string;
@@ -73,7 +71,6 @@ const CleanerManager: React.FC<CleanerManagerProps> = ({ onCleanersRefresh }) =>
   const [formData, setFormData] = useState<CleanerPayload>({
     cleanerName: "",
     type: "cleaner",
-    payRatePerHour: 25,
     accountName: "",
     bsb: "",
     accountNumber: "",
@@ -100,7 +97,7 @@ const CleanerManager: React.FC<CleanerManagerProps> = ({ onCleanersRefresh }) =>
   const [modalAssignments, setModalAssignments] = useState<SiteCleanerAssignment[]>([]);
   const [sitesById, setSitesById] = useState<Record<string, Site>>({});
 
-  type CleanerSortKey = "name" | "status" | "rate";
+  type CleanerSortKey = "name" | "status";
   const [cleanerSortBy, setCleanerSortBy] = useState<CleanerSortKey>("name");
   const [workerTypeFilter, setWorkerTypeFilter] = useState<"all" | "cleaner" | "contractor">("all");
 
@@ -191,7 +188,6 @@ const CleanerManager: React.FC<CleanerManagerProps> = ({ onCleanersRefresh }) =>
     setFormData({
       cleanerName: "",
       type: "cleaner",
-      payRatePerHour: 25,
       accountName: "",
       bsb: "",
       accountNumber: "",
@@ -207,7 +203,6 @@ const CleanerManager: React.FC<CleanerManagerProps> = ({ onCleanersRefresh }) =>
         id: crypto.randomUUID(),
         cleanerName: "",
         type: "cleaner",
-        payRatePerHour: 25,
         accountName: "",
         bsb: "",
         accountNumber: "",
@@ -227,7 +222,6 @@ const CleanerManager: React.FC<CleanerManagerProps> = ({ onCleanersRefresh }) =>
         id: crypto.randomUUID(),
         cleanerName: "",
         type: "cleaner",
-        payRatePerHour: 25,
         accountName: "",
         bsb: "",
         accountNumber: "",
@@ -257,7 +251,6 @@ const CleanerManager: React.FC<CleanerManagerProps> = ({ onCleanersRefresh }) =>
         await createCleaner(token, {
           cleanerName: row.cleanerName.trim(),
           type: row.type ?? "cleaner",
-          payRatePerHour: row.payRatePerHour === "" ? 25 : (row.payRatePerHour ?? 25),
           accountName: row.accountName?.trim() ?? "",
           bsb: row.bsb?.trim() ?? "",
           accountNumber: row.accountNumber?.trim() ?? "",
@@ -282,7 +275,6 @@ const CleanerManager: React.FC<CleanerManagerProps> = ({ onCleanersRefresh }) =>
     setFormData({
       cleanerName: cleaner.cleanerName,
       type: cleaner.type ?? "cleaner",
-      payRatePerHour: cleaner.payRatePerHour ?? 25,
       accountName: cleaner.accountName ?? "",
       bsb: cleaner.bsb ?? "",
       accountNumber: cleaner.accountNumber ?? "",
@@ -296,7 +288,6 @@ const CleanerManager: React.FC<CleanerManagerProps> = ({ onCleanersRefresh }) =>
     setFormData({
       cleanerName: "",
       type: "cleaner",
-      payRatePerHour: 25,
       accountName: "",
       bsb: "",
       accountNumber: "",
@@ -319,9 +310,8 @@ const CleanerManager: React.FC<CleanerManagerProps> = ({ onCleanersRefresh }) =>
     setSubmitError(null);
     const isContractorSave = (formData.type ?? "cleaner") === "contractor";
     const payrollFields = isContractorSave
-      ? { payRatePerHour: 0, accountName: "", bsb: "", accountNumber: "" }
+      ? { accountName: "", bsb: "", accountNumber: "" }
       : {
-          payRatePerHour: formData.payRatePerHour ?? 25,
           accountName: formData.accountName?.trim() ?? "",
           bsb: formData.bsb?.trim() ?? "",
           accountNumber: formData.accountNumber?.trim() ?? "",
@@ -418,10 +408,6 @@ const CleanerManager: React.FC<CleanerManagerProps> = ({ onCleanersRefresh }) =>
         const av = a.active ? 1 : 0;
         const bv = b.active ? 1 : 0;
         cmp = av - bv;
-      } else if (cleanerSortBy === "rate") {
-        const ar = a.payRatePerHour ?? 0;
-        const br = b.payRatePerHour ?? 0;
-        cmp = ar - br;
       }
       return cleanerSortDir === "asc" ? cmp : -cmp;
     });
@@ -919,9 +905,6 @@ const CleanerManager: React.FC<CleanerManagerProps> = ({ onCleanersRefresh }) =>
                         {cleaner.active ? "Active" : "Inactive"}
                       </span>
                     </td>
-                    <td className="px-1.5 py-1.5">
-                      <span className="text-[11px] font-semibold text-green-600">${Number(cleaner.payRatePerHour || 0).toFixed(2)}/hr</span>
-                    </td>
                     <td className="hidden md:table-cell px-1.5 py-1.5 text-[11px] text-gray-600 break-words" title={cleaner.accountName || undefined}>
                       {cleaner.accountName || "—"}
                     </td>
@@ -1063,22 +1046,6 @@ const CleanerManager: React.FC<CleanerManagerProps> = ({ onCleanersRefresh }) =>
 
               {!workerFormIsContractor && (
                 <>
-                  <div className="space-y-1">
-                    <label className="text-[10px] font-bold text-gray-400 uppercase tracking-widest">
-                      Pay Rate ($/hr)
-                    </label>
-                    <input
-                      type="number"
-                      step="0.5"
-                      min={0}
-                      value={formData.payRatePerHour ?? 25}
-                      onChange={(e) =>
-                        setFormData({ ...formData, payRatePerHour: parseFloat(e.target.value) || 0 })
-                      }
-                      className="w-full px-3 py-2 border border-[#edeef0] rounded-md text-sm outline-none focus:ring-1 focus:ring-gray-900"
-                    />
-                  </div>
-
                   <div className="bg-gray-50 p-6 rounded-xl space-y-4 border border-[#edeef0]">
                     <h4 className="text-[10px] font-bold text-gray-400 uppercase tracking-widest flex items-center gap-2 mb-2">
                       <CreditCard size={12} /> Payroll & Banking
@@ -1178,7 +1145,6 @@ const CleanerManager: React.FC<CleanerManagerProps> = ({ onCleanersRefresh }) =>
                     <tr className="bg-gray-50 border-b border-[#edeef0] text-[10px] font-bold text-gray-500 uppercase tracking-widest">
                       <th className="py-2 px-2 w-6"></th>
                       <th className="py-2 px-2 min-w-[140px]">Worker Name</th>
-                      <th className="py-2 px-2 w-24">Rate ($/hr)</th>
                       <th className="py-2 px-2 min-w-[160px]">Account name</th>
                       <th className="py-2 px-2 w-24">BSB</th>
                       <th className="py-2 px-2 w-32">Account no.</th>
@@ -1205,21 +1171,6 @@ const CleanerManager: React.FC<CleanerManagerProps> = ({ onCleanersRefresh }) =>
                             onChange={(e) => updateBulkRow(row.id, { cleanerName: e.target.value })}
                             className="w-full border border-[#edeef0] rounded px-2 py-1 text-sm"
                             placeholder="Name"
-                            disabled={bulkSubmitLoading}
-                          />
-                        </td>
-                        <td className="py-1 px-2">
-                          <input
-                            type="number"
-                            min={0}
-                            step={0.5}
-                            value={row.payRatePerHour === "" ? "" : row.payRatePerHour}
-                            onChange={(e) =>
-                              updateBulkRow(row.id, {
-                                payRatePerHour: e.target.value === "" ? "" : parseFloat(e.target.value) || 0,
-                              })
-                            }
-                            className="w-full border border-[#edeef0] rounded px-2 py-1 text-sm"
                             disabled={bulkSubmitLoading}
                           />
                         </td>

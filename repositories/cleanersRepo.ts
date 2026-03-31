@@ -8,7 +8,6 @@ let cachedCleanersFieldMap: Record<string, string> | null = null;
 export interface CleanerItem {
   id: string;
   cleanerName: string;
-  payRatePerHour: number;
   accountName: string;
   bsb: string;
   accountNumber: string;
@@ -82,7 +81,6 @@ function itemToCleaner(item: sharepoint.GraphListItem, map: Record<string, strin
     getString(fields, nameKey, "LinkTitle", "Title", "Cleaner_x0020_Name") ||
     getString(fields, "Title") ||
     "";
-  const payRateKey = map["Pay Rate"] ?? "Pay Rate";
   const accountKey = map["Account Name"] ?? "Account Name";
   const bsbKey = map["BSB"] ?? "BSB";
   const accountNumKey = map["Account Number"] ?? "Account Number";
@@ -94,7 +92,6 @@ function itemToCleaner(item: sharepoint.GraphListItem, map: Record<string, strin
   return {
     id: item.id,
     cleanerName,
-    payRatePerHour: getNumber(fields, payRateKey, "Pay_x0020_Rate", "Pay Rate"),
     accountName: getString(fields, accountKey, "Account_x0020_Name", "Account Name"),
     bsb: getString(fields, bsbKey, "BSB"),
     accountNumber: getString(fields, accountNumKey, "Account_x0020_Number", "Account Number"),
@@ -133,7 +130,6 @@ export async function getCleaners(accessToken: string): Promise<CleanerItem[]> {
 
 export interface CleanerPayload {
   cleanerName: string;
-  payRatePerHour?: number;
   accountName?: string;
   bsb?: string;
   accountNumber?: string;
@@ -151,10 +147,6 @@ function payloadToFields(
     let k = requireMapKey(map, "Cleaner Name");
     if (k === "LinkTitle") k = "Title";
     fields[k] = payload.cleanerName;
-  }
-  if (payload.payRatePerHour !== undefined) {
-    const k = map["Pay Rate"];
-    if (k) fields[k] = payload.payRatePerHour;
   }
   if (payload.accountName !== undefined) {
     const k = map["Account Name"];
@@ -186,7 +178,6 @@ export async function createCleaner(accessToken: string, payload: CleanerPayload
   const fields = payloadToFields(
     {
       cleanerName: payload.cleanerName,
-      payRatePerHour: payload.payRatePerHour ?? 0,
       accountName: payload.accountName ?? "",
       bsb: payload.bsb ?? "",
       accountNumber: payload.accountNumber ?? "",

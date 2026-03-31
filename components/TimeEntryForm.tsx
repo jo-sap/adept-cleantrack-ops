@@ -9,7 +9,7 @@ import { getDayStatus, getFortnightForTimesheetCompletion, isFortnightLockedForV
 import { getSiteRateForDate, computeBudgetedLabourCostForRange } from '../lib/budgetedLabourCost';
 import { getPublicHolidaysInRange } from '../lib/publicHolidays';
 import { getNoServicePeriodForDate } from '../lib/noServicePeriods';
-import { Save, Zap, Building, ArrowLeft, UserPlus, TrendingUp, TrendingDown, Check, Download, FileSpreadsheet, Search, Loader2, Eraser, Copy, Briefcase } from 'lucide-react';
+import { Save, Zap, Building, ArrowLeft, UserPlus, TrendingUp, TrendingDown, Check, Download, FileSpreadsheet, Search, Loader2, Eraser, Copy, Briefcase, Trash2 } from 'lucide-react';
 import { exportFortnightTimesheets } from '../services/exportService';
 import { getGraphAccessToken } from '../lib/graph';
 import { getAdHocJobs } from '../repositories/adHocJobsRepo';
@@ -22,8 +22,11 @@ import {
   buildSiteNotesExportLookup,
   normalizeSiteLabelForNotes,
   comparablePeriodYmd,
+  deleteTimesheetPeriodNotesForClearAllScope,
+  deleteAllTimesheetPeriodNotesForFortnight,
   type SiteNotesExportLookup,
 } from '../repositories/timesheetNotesRepo';
+import { deleteAllTimesheetEntriesInRange } from '../repositories/metricsRepo';
 import { generateAdHocOccurrencesForRange, occurrencesToHoursByDate, adHocJobHasPlannedWorkInRange } from '../lib/adhocSchedule';
 import TimesheetPeriodNotesPanel from './TimesheetPeriodNotesPanel';
 import { AppSelect } from './ui';
@@ -33,9 +36,11 @@ interface TimeEntryFormProps {
   cleaners: Cleaner[];
   entries: TimeEntry[];
   currentPeriod: FortnightPeriod;
-  onSaveBatch: (entries: Omit<TimeEntry, 'id'>[]) => void;
+  onSaveBatch: (entries: Omit<TimeEntry, 'id'>[]) => void | Promise<boolean>;
   onDeleteEntry: (id: string) => void;
   onUpdateSite?: (site: Site) => void;
+  /** After admin clears the entire portfolio for the header fortnight, refetch entries from SharePoint. */
+  onTimesheetsFortnightRefresh?: () => Promise<void>;
 }
 
 type QueueKey = 'all' | 'needs-hours' | 'incomplete' | 'over-budget' | 'completed' | 'adhoc';
@@ -97,7 +102,7 @@ function getAdHocCostRateForDate(job: AdHocJob, date: Date, publicHolidayDates: 
 }
 
 const TimeEntryForm: React.FC<TimeEntryFormProps> = ({ 
-  sites, cleaners, entries, currentPeriod, onSaveBatch, onUpdateSite
+  sites, cleaners, entries, currentPeriod, onSaveBatch, onUpdateSite, onTimesheetsFortnightRefresh
 }) => {
   const { isAdmin, isManager } = useRole();
   const { user: authUser } = useAppAuth();
@@ -131,6 +136,7 @@ const TimeEntryForm: React.FC<TimeEntryFormProps> = ({
   const [notesListLoading, setNotesListLoading] = useState(false);
   const [notesListMissing, setNotesListMissing] = useState(false);
   const [notesListSchemaError, setNotesListSchemaError] = useState<string | null>(null);
+  const [portfolioFortnightClearLoading, setPortfolioFortnightClearLoading] = useState(false);
 
   const inputRefs = useRef<Record<string, HTMLInputElement | null>>({});
 
@@ -400,6 +406,34 @@ const TimeEntryForm: React.FC<TimeEntryFormProps> = ({
     return occurrencesToHoursByDate(activeAdHocOccurrences);
   }, [activeAdHocOccurrences]);
 
+  // Day-level Ad Hoc rate map used by both summary-style figures and day cards.
+  const activeAdHocRateByDate = useMemo(() => {
+    const byDate: Record<string, number> = {};
+    if (!activeAdHocJob) return byDate;
+    const occurrenceTotalsByDate = activeAdHocOccurrences.reduce<Record<string, { hours: number; cost: number }>>(
+      (acc, occ) => {
+        if (occ.hours <= 0) return acc;
+        const bucket = acc[occ.date] ?? { hours: 0, cost: 0 };
+        bucket.hours += occ.hours;
+        bucket.cost += occ.costTotal;
+        acc[occ.date] = bucket;
+        return acc;
+      },
+      {}
+    );
+
+    dates.forEach((date) => {
+      const dateStr = format(date, "yyyy-MM-dd");
+      const occurrenceTotals = occurrenceTotalsByDate[dateStr];
+      const rate =
+        (occurrenceTotals && occurrenceTotals.hours > 0
+          ? occurrenceTotals.cost / occurrenceTotals.hours
+          : undefined) ?? getAdHocCostRateForDate(activeAdHocJob, date, phInPeriod);
+      byDate[dateStr] = rate;
+    });
+    return byDate;
+  }, [activeAdHocJob, activeAdHocOccurrences, dates, phInPeriod]);
+
   const activeAdHocTotals = useMemo(() => {
     return activeAdHocOccurrences.reduce(
       (acc, o) => {
@@ -486,7 +520,35 @@ const TimeEntryForm: React.FC<TimeEntryFormProps> = ({
         const d = new Date(e.date);
         if (d < start || d >= endExclusive) return;
         loggedHours += e.hours;
-        loggedCost += e.hours * (e.pay_rate_snapshot ?? 0);
+        // No cleaner pay rate: use the linked site's budget rate when available,
+        // otherwise use the Ad Hoc job's own cost rates/overrides.
+        const linkedSite =
+          e.siteId ? sites.find((s) => String(s.id) === String(e.siteId)) : undefined;
+        const rate = linkedSite
+          ? (() => {
+              const weekdayRate =
+                linkedSite.budget_weekday_labour_rate ?? linkedSite.budget_labour_rate ?? 0;
+              const saturdayRate =
+                linkedSite.budget_saturday_labour_rate ?? weekdayRate;
+              const sundayRate = linkedSite.budget_sunday_labour_rate ?? weekdayRate;
+              const phRate = linkedSite.budget_ph_labour_rate ?? weekdayRate;
+              const siteState = siteStateById[linkedSite.id] || undefined;
+              const phForSite = getPublicHolidaysInRange(
+                currentPeriod.startDate,
+                currentPeriod.endDate,
+                siteState
+              );
+              return getSiteRateForDate(
+                d,
+                weekdayRate,
+                saturdayRate,
+                sundayRate,
+                phRate,
+                phForSite
+              );
+            })()
+          : getAdHocCostRateForDate(job, d, phInPeriod);
+        loggedCost += e.hours * rate;
       });
 
       map[job.id] = {
@@ -499,7 +561,15 @@ const TimeEntryForm: React.FC<TimeEntryFormProps> = ({
     });
 
     return map;
-  }, [fortnightAdHocJobs, currentPeriod.startDate, currentPeriod.endDate, phInPeriod, entries]);
+  }, [
+    fortnightAdHocJobs,
+    currentPeriod.startDate,
+    currentPeriod.endDate,
+    phInPeriod,
+    entries,
+    sites,
+    siteStateById,
+  ]);
 
   const adHocCleanerNamesByJobId = useMemo(() => {
     const startYmd = format(currentPeriod.startDate, "yyyy-MM-dd");
@@ -1000,12 +1070,13 @@ const TimeEntryForm: React.FC<TimeEntryFormProps> = ({
             cleanerId: selectedCleanerId,
             date,
             hours,
-            pay_rate_snapshot: activeSite.cleaner_rates[selectedCleanerId] || activeCleaner.payRatePerHour || 0,
             adhocJobId: adhocJobId || undefined
           }));
-          await onSaveBatch(batchData as any);
-          setHasUnsavedChanges(false);
-          anySuccess = true;
+          const savedOk = await onSaveBatch(batchData as any);
+          if (savedOk !== false) {
+            setHasUnsavedChanges(false);
+            anySuccess = true;
+          }
         }
       }
 
@@ -1061,6 +1132,156 @@ const TimeEntryForm: React.FC<TimeEntryFormProps> = ({
     });
     setDraftHours(next);
     setHasUnsavedChanges(true);
+  };
+
+  /** Persist zeros for every cleaner for this site (contract) or ad hoc job — not just the selected person. */
+  const handleClearSiteFortnightAllCleaners = async () => {
+    if (!(isAdmin || isManager) || !activeSite || periodLocked || saveLoading) return;
+    if (isVirtualAdHocContext && !adhocJobId) return;
+
+    const periodStartYmd = format(currentPeriod.startDate, "yyyy-MM-dd");
+    const periodEndYmd = format(currentPeriod.endDate, "yyyy-MM-dd");
+
+    const cleanerIdSet = new Set<string>();
+    if (adhocJobId) {
+      entries.forEach((e) => {
+        if (e.adhocJobId !== adhocJobId) return;
+        if (e.date < periodStartYmd || e.date > periodEndYmd) return;
+        if (e.cleanerId) cleanerIdSet.add(e.cleanerId);
+      });
+    } else {
+      if (!activeSiteId || isVirtualAdHocContext) return;
+      entries.forEach((e) => {
+        if (String(e.siteId) !== String(activeSiteId) || e.adhocJobId) return;
+        if (e.date < periodStartYmd || e.date > periodEndYmd) return;
+        if (e.cleanerId) cleanerIdSet.add(e.cleanerId);
+      });
+      (activeSite.assigned_cleaner_ids ?? []).forEach((id) => cleanerIdSet.add(id));
+    }
+    if (selectedCleanerId) cleanerIdSet.add(selectedCleanerId);
+
+    if (cleanerIdSet.size === 0) {
+      window.alert("No cleaners are assigned or have hours for this site in this fortnight.");
+      return;
+    }
+
+    const siteLabel = activeSite.name?.trim() || "this site";
+    const ok = window.confirm(
+      adhocJobId
+        ? `Clear ALL logged hours for this Ad Hoc job in this fortnight for every cleaner, and remove manager notes for this job/period? This saves immediately to SharePoint.`
+        : `Clear ALL contract hours for "${siteLabel}" in this fortnight for every cleaner, and remove manager notes for this site/period? This saves immediately to SharePoint.`
+    );
+    if (!ok) return;
+
+    const siteIdForPayload = isVirtualAdHocContext ? undefined : activeSiteId ?? undefined;
+    const batch: Omit<TimeEntry, "id">[] = [];
+
+    for (const cid of cleanerIdSet) {
+      const cleaner = cleaners.find((c) => c.id === cid);
+      dates.forEach((d) => {
+        batch.push({
+          siteId: siteIdForPayload,
+          cleanerId: cid,
+          date: format(d, "yyyy-MM-dd"),
+          hours: 0,
+          adhocJobId: adhocJobId || undefined,
+        } as any);
+      });
+    }
+
+    setSaveLoading(true);
+    try {
+      const savedOk = await onSaveBatch(batch as any);
+      if (savedOk === false) return;
+      const nextDraft: Record<string, number> = {};
+      dates.forEach((d) => {
+        nextDraft[format(d, "yyyy-MM-dd")] = 0;
+      });
+      setDraftHours(nextDraft);
+      setHasUnsavedChanges(false);
+
+      let clearManagerNotesLocally = false;
+      const token = await getGraphAccessToken();
+      if (token && !notesListSchemaError && !notesListMissing) {
+        const siteNameForNotes = adhocJobId
+          ? getDisplayAdHocJobName(activeAdHocJob) || activeSite.name || ""
+          : activeSite.name?.trim() || "";
+        const noteRes = await deleteTimesheetPeriodNotesForClearAllScope(token, {
+          periodStartYmd,
+          siteId: isVirtualAdHocContext ? "" : String(activeSiteId ?? ""),
+          siteDisplayName: siteNameForNotes,
+          adhocJobId: adhocJobId || null,
+        });
+        if (noteRes.ok) {
+          clearManagerNotesLocally = true;
+        } else {
+          window.alert(
+            `Hours were cleared, but manager notes could not be removed: ${noteRes.error}`
+          );
+        }
+      } else if (notesListMissing) {
+        clearManagerNotesLocally = true;
+      } else if (notesListSchemaError) {
+        window.alert(
+          "Hours were cleared. Manager notes could not be updated due to a SharePoint list configuration issue; fix the list or clear notes manually if needed."
+        );
+      }
+
+      if (clearManagerNotesLocally) {
+        setManagerNoteBody("");
+        setManagerNoteSavedBody("");
+      }
+    } finally {
+      setSaveLoading(false);
+    }
+  };
+
+  /** Admin only: remove every timesheet row and period note for the header fortnight (currentPeriod), portfolio-wide. */
+  const handleClearPortfolioFortnight = async () => {
+    if (!isAdmin || periodLocked || portfolioFortnightClearLoading) return;
+    const periodLabel = `${format(currentPeriod.startDate, "MMM d")} — ${format(currentPeriod.endDate, "MMM d")}`;
+    if (
+      !window.confirm(
+        `Clear ALL timesheet hours for every site and cleaner for ${periodLabel} only?\n\nThis also removes all manager notes for that fortnight in SharePoint. Other pay periods are not affected. This cannot be undone from this app.`
+      )
+    ) {
+      return;
+    }
+    setPortfolioFortnightClearLoading(true);
+    try {
+      const token = await getGraphAccessToken();
+      if (!token) {
+        window.alert("Sign in with Microsoft to clear timesheets.");
+        return;
+      }
+      const range = {
+        start: currentPeriod.startDate,
+        end: new Date(currentPeriod.endDate.getTime() + 24 * 60 * 60 * 1000),
+      };
+      const del = await deleteAllTimesheetEntriesInRange(token, range);
+      if (del.error) {
+        window.alert(`Could not clear timesheet rows: ${del.error}`);
+        return;
+      }
+      const periodYmd = format(currentPeriod.startDate, "yyyy-MM-dd");
+      const noteRes = await deleteAllTimesheetPeriodNotesForFortnight(token, periodYmd);
+      if (!noteRes.ok && !noteRes.error.includes("was not found")) {
+        window.alert(
+          `Removed ${del.deleted} timesheet row(s), but manager notes could not be cleared: ${noteRes.error}`
+        );
+      }
+      await onTimesheetsFortnightRefresh?.();
+      const nextDraft: Record<string, number> = {};
+      dates.forEach((d) => {
+        nextDraft[format(d, "yyyy-MM-dd")] = 0;
+      });
+      setDraftHours(nextDraft);
+      setHasUnsavedChanges(false);
+      setManagerNoteBody("");
+      setManagerNoteSavedBody("");
+    } finally {
+      setPortfolioFortnightClearLoading(false);
+    }
   };
 
   const handleAutoFill = () => {
@@ -1502,9 +1723,9 @@ const TimeEntryForm: React.FC<TimeEntryFormProps> = ({
                   ) : null}
                   Hours and payroll exports use the <span className="font-semibold">cleaner</span> you select
                   above. For subcontractors, add them as a{" "}
-                  <span className="font-semibold">Cleaner</span> in CleanTrack (pay rate, bank details) and pick
+                  <span className="font-semibold">Cleaner</span> in CleanTrack (bank details) and pick
                   them here. The job&apos;s cost rate drives <span className="font-semibold">Est. pay</span> on
-                  this screen; the saved pay rate snapshot comes from the cleaner profile when you save.
+                  this screen.
                 </div>
               )}
             </div>
@@ -1593,6 +1814,20 @@ const TimeEntryForm: React.FC<TimeEntryFormProps> = ({
                   <Eraser size={12} className="opacity-70 mb-0.5" />
                   <span className="text-[10px] font-bold uppercase">Clear</span>
                 </button>
+                {(isAdmin || isManager) && (
+                  <button
+                    type="button"
+                    onClick={() => void handleClearSiteFortnightAllCleaners()}
+                    disabled={periodLocked || saveLoading || !activeSiteId}
+                    className="flex flex-col items-center justify-center w-full sm:w-24 h-12 sm:h-14 rounded-xl border border-red-200 bg-white text-red-700 hover:bg-red-50 hover:border-red-300 transition-all disabled:opacity-40 disabled:cursor-not-allowed"
+                    title="Admin: clear every cleaner’s hours and manager notes for this site/job in this fortnight (saves immediately)"
+                  >
+                    <Trash2 size={12} className="opacity-80 mb-0.5" />
+                    <span className="text-[10px] font-bold uppercase leading-tight text-center px-0.5">
+                      Clear all
+                    </span>
+                  </button>
+                )}
                 <button
                   onClick={handleSave}
                   disabled={!canSaveAnything || saveLoading}
@@ -1661,6 +1896,19 @@ const TimeEntryForm: React.FC<TimeEntryFormProps> = ({
                   readOnlyZeroScheduledAdHocDay;
                 const noServiceLabel = noServicePeriod?.label?.trim() || noServicePeriod?.reason?.trim() || "No Service";
                 const phTint = isPublicHolidayDay ? "ring-1 ring-violet-200 bg-violet-50/40" : "";
+                const dayRate = isAdHoc
+                  ? (activeAdHocRateByDate[dateStr] ?? 0)
+                  : getSiteRateForDate(
+                      date,
+                      activeSite.budget_weekday_labour_rate ?? activeSite.budget_labour_rate ?? 0,
+                      activeSite.budget_saturday_labour_rate ??
+                        (activeSite.budget_weekday_labour_rate ?? activeSite.budget_labour_rate ?? 0),
+                      activeSite.budget_sunday_labour_rate ??
+                        (activeSite.budget_weekday_labour_rate ?? activeSite.budget_labour_rate ?? 0),
+                      activeSite.budget_ph_labour_rate ??
+                        (activeSite.budget_weekday_labour_rate ?? activeSite.budget_labour_rate ?? 0),
+                      phForActiveSiteInPeriod
+                    );
                 return (
                   <div
                     key={dateStr}
@@ -1696,6 +1944,10 @@ const TimeEntryForm: React.FC<TimeEntryFormProps> = ({
                           {otherHours > 0 ? ` (-${otherHours.toFixed(1)}h)` : ""}
                         </span>
                         <span className="text-[9px] font-bold text-gray-800">{planned.toFixed(1)}h</span>
+                      </div>
+                      <div className="flex justify-between items-center">
+                        <span className="text-[8px] font-bold text-gray-400">Rate</span>
+                        <span className="text-[9px] font-bold text-gray-800">${dayRate.toFixed(2)}/h</span>
                       </div>
                       <input
                         ref={el => inputRefs.current[dateStr] = el}
@@ -1773,7 +2025,19 @@ const TimeEntryForm: React.FC<TimeEntryFormProps> = ({
             Portfolio audit board — enter and review hours by site and cleaner.
           </p>
         </div>
-        <div className="flex gap-2 flex-shrink-0">
+        <div className="flex gap-2 flex-shrink-0 flex-wrap">
+          {isAdmin && (
+            <button
+              type="button"
+              disabled={periodLocked || portfolioFortnightClearLoading}
+              onClick={() => void handleClearPortfolioFortnight()}
+              className="flex items-center gap-1.5 px-4 py-2 rounded-xl border border-red-200 bg-white text-red-700 text-xs font-semibold hover:bg-red-50 disabled:opacity-40 disabled:cursor-not-allowed"
+              title="Admin only: delete all timesheet rows and manager period notes for this fortnight only (SharePoint)"
+            >
+              <Trash2 size={14} />
+              {portfolioFortnightClearLoading ? "Clearing…" : "Clear fortnight"}
+            </button>
+          )}
           <button
             type="button"
             disabled={periodLocked}

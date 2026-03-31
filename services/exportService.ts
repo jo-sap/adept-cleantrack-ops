@@ -1,10 +1,14 @@
 import * as XLSX from 'xlsx-js-style';
-import { format, addDays } from 'date-fns';
+import { format, addDays, endOfMonth } from 'date-fns';
 import { Site, Cleaner, TimeEntry, FortnightPeriod, AdHocJob } from '../types';
 import * as sharepoint from '../lib/sharepoint';
 import { normalizeSiteLabelForNotes } from '../lib/siteNotesLabel';
 import { resolveAdHocJobNameTemplate } from '../lib/adhocPlaceholders';
 import type { SiteNotesExportLookup } from '../repositories/timesheetNotesRepo';
+import { getSiteRateForDate } from '../lib/budgetedLabourCost';
+import { getPublicHolidaysInRange } from '../lib/publicHolidays';
+import { generateAdHocOccurrencesForRange } from '../lib/adhocSchedule';
+import { AU_STATES } from '../lib/auStates';
 
 function managerNoteForExport(
   lookup: SiteNotesExportLookup | undefined,
@@ -88,29 +92,103 @@ function applyNoteColumnHighlight(
   }
 }
 
+function getAdHocCostRateForDate(
+  job: AdHocJob,
+  date: Date,
+  publicHolidayDates: Set<string>
+): number {
+  const base = job.costRatePerHour ?? 0;
+  const ymd = format(date, "yyyy-MM-dd");
+  if (publicHolidayDates.has(ymd) && job.publicHolidayCostRateOverride != null) {
+    return job.publicHolidayCostRateOverride ?? base;
+  }
+  const dow = date.getDay(); // 0=Sun..6=Sat
+  if (dow === 6 && job.saturdayCostRateOverride != null) return job.saturdayCostRateOverride ?? base;
+  if (dow === 0 && job.sundayCostRateOverride != null) return job.sundayCostRateOverride ?? base;
+  if (job.weekdayCostRateOverride != null) return job.weekdayCostRateOverride ?? base;
+  return base;
+}
+
+function extractAustralianStateCode(value: string | null | undefined): string {
+  const raw = String(value ?? "").trim();
+  if (!raw) return "";
+  const upper = raw.toUpperCase();
+  const lettersOnly = upper.replace(/[^A-Z]/g, "");
+
+  for (const state of AU_STATES) {
+    if (lettersOnly === state) return state;
+  }
+
+  if (upper.includes("NEW SOUTH WALES")) return "NSW";
+  if (upper.includes("VICTORIA")) return "VIC";
+  if (upper.includes("QUEENSLAND")) return "QLD";
+  if (upper.includes("SOUTH AUSTRALIA")) return "SA";
+  if (upper.includes("WESTERN AUSTRALIA")) return "WA";
+  if (upper.includes("TASMANIA")) return "TAS";
+  if (upper.includes("NORTHERN TERRITORY")) return "NT";
+  if (upper.includes("AUSTRALIAN CAPITAL TERRITORY")) return "ACT";
+  return "";
+}
+
+/**
+ * Hours-based units for the export month: once-off uses budgeted hours; recurring sums
+ * scheduled occurrence hours in the filtered month (same window as the Ad Hoc modal).
+ */
+function getAdHocJobUnitsForExportMonth(j: AdHocJob, monthContextDate: Date): number | null {
+  const schedule = String(j.jobType ?? '')
+    .trim()
+    .toLowerCase();
+  if (!schedule.includes('recurr')) {
+    return j.budgetedHours != null ? Number(j.budgetedHours) : null;
+  }
+  if (!j.scheduledDate || !j.recurrenceFrequency) {
+    return j.budgetedHours != null ? Number(j.budgetedHours) : null;
+  }
+  const startDate = new Date(j.scheduledDate);
+  if (isNaN(startDate.getTime())) return j.budgetedHours != null ? Number(j.budgetedHours) : null;
+
+  const monthStart = new Date(monthContextDate.getFullYear(), monthContextDate.getMonth(), 1);
+  const monthEnd = endOfMonth(monthContextDate);
+  const endDate = j.recurrenceEndDate ? new Date(j.recurrenceEndDate) : null;
+  if (endDate && isNaN(endDate.getTime())) {
+    return j.budgetedHours != null ? Number(j.budgetedHours) : null;
+  }
+
+  const previewStart = startDate > monthStart ? startDate : monthStart;
+  const previewEnd = endDate && endDate < monthEnd ? endDate : monthEnd;
+  if (previewStart > previewEnd) {
+    return j.budgetedHours != null ? Number(j.budgetedHours) : null;
+  }
+
+  const phSet = getPublicHolidaysInRange(previewStart, previewEnd);
+  const occurrences = generateAdHocOccurrencesForRange(j, previewStart, previewEnd, phSet);
+  const units = occurrences.reduce((sum, o) => sum + o.hours, 0);
+  return units;
+}
+
 /** Export current Ad Hoc jobs to XLSX. Uses the same job list as the UI (respects month/status/manager/site filters). */
 export const exportAdHocJobsToSpreadsheet = (jobs: AdHocJob[], monthLabel: string) => {
   const headers = [
     'Job Name',
-    'Schedule Type',
+    'Schedule',
     'Recurrence',
     'Company',
-    'Client',
     'Site',
-    'Manual Site Address',
-    'Manual Site State',
+    'Manual Site',
+    'Manual State',
     'Assigned Manager',
     'Requested',
     'Scheduled',
     'Completed',
     'Status',
-    'Budgeted Hrs',
+    'Budgeted',
+    'Units',
+    'Charge per hour',
     'Charge',
     'Cost',
     'Gross Profit',
-    'Approval Proof',
-    'Requested By',
-    'Requested By Email',
+    'Approval',
+    'Requested',
     'Description',
   ];
 
@@ -153,29 +231,32 @@ export const exportAdHocJobsToSpreadsheet = (jobs: AdHocJob[], monthLabel: strin
   const [y, m] = monthLabel.split('-').map(Number);
   const monthContextDate = new Date(y, (m || 1) - 1, 1);
 
-  const rows: any[][] = jobs.map((j) => [
-    resolveAdHocJobNameTemplate(j.jobName, monthContextDate) || j.jobName || '',
-    scheduleTypeLabel(j.jobType),
-    recurrenceSummary(j),
-    j.companyName ?? '',
-    j.clientName ?? '',
-    j.siteName || j.manualSiteName || '',
-    j.manualSiteAddress ?? '',
-    j.manualSiteState ?? '',
-    j.assignedManagerName ?? '',
-    j.requestedDate ? format(new Date(j.requestedDate), 'dd MMM yyyy') : '',
-    j.scheduledDate ? format(new Date(j.scheduledDate), 'dd MMM yyyy') : '',
-    j.completedDate ? format(new Date(j.completedDate), 'dd MMM yyyy') : '',
-    j.status ?? '',
-    j.budgetedHours != null ? j.budgetedHours : '',
-    j.charge != null ? Number(j.charge) : '',
-    j.cost != null ? Number(j.cost) : '',
-    j.grossProfit != null ? Number(j.grossProfit) : '',
-    j.approvalProofUploaded ? 'Yes' : 'No',
-    j.requestedByName ?? '',
-    j.requestedByEmail ?? '',
-    j.description ?? '',
-  ]);
+  const rows: any[][] = jobs.map((j) => {
+    const units = getAdHocJobUnitsForExportMonth(j, monthContextDate);
+    return [
+      resolveAdHocJobNameTemplate(j.jobName, monthContextDate) || j.jobName || '',
+      scheduleTypeLabel(j.jobType),
+      recurrenceSummary(j),
+      j.companyName ?? '',
+      j.siteName || j.manualSiteName || '',
+      j.manualSiteAddress ?? '',
+      j.manualSiteState ?? '',
+      j.assignedManagerName ?? '',
+      j.requestedDate ? format(new Date(j.requestedDate), 'dd MMM yyyy') : '',
+      j.scheduledDate ? format(new Date(j.scheduledDate), 'dd MMM yyyy') : '',
+      j.completedDate ? format(new Date(j.completedDate), 'dd MMM yyyy') : '',
+      j.status ?? '',
+      j.budgetedHours != null ? j.budgetedHours : '',
+      units != null ? units : '',
+      j.chargeRatePerHour != null ? Number(j.chargeRatePerHour) : '',
+      j.charge != null ? Number(j.charge) : '',
+      j.cost != null ? Number(j.cost) : '',
+      j.grossProfit != null ? Number(j.grossProfit) : '',
+      j.approvalProofUploaded ? 'Yes' : 'No',
+      j.requestedByName ?? '',
+      j.description ?? '',
+    ];
+  });
 
   if (rows.length === 0) {
     alert('No ad hoc jobs to export for the selected filters.');
@@ -208,6 +289,9 @@ export const exportFortnightTimesheets = (
   for (let i = 0; i < 14; i++) {
     dates.push(addDays(period.startDate, i));
   }
+
+  // Used for PH ($/hr) selection. Other rate types are purely weekday-based.
+  const phInPeriod = getPublicHolidaysInRange(period.startDate, period.endDate);
 
   const dateHeaders = dates.map(d => format(d, 'EEE d MMM'));
   const headers = [
@@ -242,9 +326,10 @@ export const exportFortnightTimesheets = (
   const grouped = new Map<string, TimeEntry[]>();
   periodEntries.forEach((e) => {
     const siteKey = e.siteId ? String(e.siteId) : '__NO_SITE__';
-    const unlinkedAdhocKey =
-      siteKey === '__NO_SITE__' && e.adhocJobId ? String(e.adhocJobId) : '__NA__';
-    const key = `${siteKey}|${String(e.cleanerId)}|${unlinkedAdhocKey}`;
+    // Important: always separate Ad Hoc jobs into their own rows, even when the Ad Hoc entry is linked to a Site.
+    // Otherwise Ad Hoc entries can merge into the same row as contract/standard work (and rates differ).
+    const adhocKey = e.adhocJobId ? String(e.adhocJobId) : '__CONTRACT__';
+    const key = `${siteKey}|${String(e.cleanerId)}|${adhocKey}`;
     if (!grouped.has(key)) grouped.set(key, []);
     grouped.get(key)!.push(e);
   });
@@ -270,6 +355,17 @@ export const exportFortnightTimesheets = (
       [adHocJob?.manualSiteAddress?.trim(), adHocJob?.manualSiteState?.trim()]
         .filter(Boolean)
         .join(', ');
+
+    const weekdayRate = site?.budget_weekday_labour_rate ?? site?.budget_labour_rate ?? 0;
+    const saturdayRate = site?.budget_saturday_labour_rate ?? weekdayRate;
+    const sundayRate = site?.budget_sunday_labour_rate ?? weekdayRate;
+    const phRate = site?.budget_ph_labour_rate ?? weekdayRate;
+    const siteStateCode = extractAustralianStateCode(site?.state ?? site?.address);
+    const phForSiteInPeriod = getPublicHolidaysInRange(
+      period.startDate,
+      period.endDate,
+      siteStateCode || undefined
+    );
 
     const row: any[] = [
       derivedSiteName,
@@ -303,11 +399,15 @@ export const exportFortnightTimesheets = (
         } else {
           contractHours += e.hours;
         }
-        const rate =
-          e.pay_rate_snapshot ||
-          (site ? site.cleaner_rates[cleanerId] : 0) ||
-          cleaner.payRatePerHour ||
-          0;
+        // Payment is driven by the same logic as the UI:
+        // - Contract/standard work: use site budget $/hr (weekday / Sat / Sun / PH)
+        // - Ad Hoc: use the Ad Hoc job's cost $/hr (weekday / Sat / Sun / PH), which should match Est. Pay.
+        const rate = e.adhocJobId
+          ? (() => {
+              const job = adHocById.get(String(e.adhocJobId));
+              return job ? getAdHocCostRateForDate(job, date, phInPeriod) : 0;
+            })()
+          : getSiteRateForDate(date, weekdayRate, saturdayRate, sundayRate, phRate, phForSiteInPeriod);
         totalPayment += e.hours * rate;
       });
     });

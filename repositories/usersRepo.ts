@@ -22,6 +22,7 @@ function normalizeRole(value: unknown): string {
   const lower = s.toLowerCase();
   if (lower === "admin") return "Admin";
   if (lower === "manager") return "Manager";
+  if (lower === "accounts" || lower === "financial controller" || lower === "financialcontroller") return "Accounts";
   return s || "Manager";
 }
 
@@ -187,7 +188,7 @@ export async function upsertManagerUser(
 export interface UserUpsertPayload {
   fullName: string;
   email: string;
-  role: "Admin" | "Manager";
+  role: "Admin" | "Manager" | "Accounts";
   active: boolean;
   permissionScope?: string | null;
 }

@@ -50,7 +50,7 @@ const SiteDetail: React.FC<SiteDetailProps> = ({ site, cleaners, entries, curren
         const token = await getGraphAccessToken();
         if (!token || cancelled) {
           if (!token) {
-            setAssignmentsError('Cleaner assignments unavailable (no Graph token).');
+            setAssignmentsError('Worker assignments unavailable (no Graph token).');
           }
           setAssignmentsLoading(false);
           return;
@@ -65,7 +65,7 @@ const SiteDetail: React.FC<SiteDetailProps> = ({ site, cleaners, entries, curren
         }
       } catch (err) {
         if (!cancelled) {
-          setAssignmentsError('Failed to load cleaner assignments for this site.');
+          setAssignmentsError('Failed to load worker assignments for this site.');
         }
       } finally {
         if (!cancelled) setAssignmentsLoading(false);
@@ -185,7 +185,7 @@ const SiteDetail: React.FC<SiteDetailProps> = ({ site, cleaners, entries, curren
     try {
       const token = await getGraphAccessToken();
       if (!token) {
-        setAssignmentsError('Cannot assign cleaner – missing Microsoft Graph token.');
+        setAssignmentsError('Cannot assign worker – missing Microsoft Graph token.');
         return;
       }
       const cleaner = cleaners.find(c => c.id === assignCleanerId);
@@ -371,7 +371,7 @@ const SiteDetail: React.FC<SiteDetailProps> = ({ site, cleaners, entries, curren
           <div className="flex items-center gap-2">
             <CalendarDays className="text-gray-400" size={18} />
             <h3 className="text-[9px] font-bold text-gray-500 uppercase tracking-widest">
-              Assigned Cleaners
+              Assigned Workers
             </h3>
           </div>
           {canManageAssignments && (
@@ -381,7 +381,7 @@ const SiteDetail: React.FC<SiteDetailProps> = ({ site, cleaners, entries, curren
               className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[11px] font-bold so-btn-primary transition-colors"
             >
               <UserPlus size={14} />
-              Assign cleaner
+              Assign worker
             </button>
           )}
         </div>
@@ -394,7 +394,7 @@ const SiteDetail: React.FC<SiteDetailProps> = ({ site, cleaners, entries, curren
           <p className="text-xs text-gray-400">Loading current assignments…</p>
         ) : assignments.length === 0 ? (
           <p className="text-xs text-gray-400">
-            No active cleaner assignments for this site.
+            No active worker assignments for this site.
           </p>
         ) : (
           <ul className="divide-y divide-[#edeef0]">
@@ -425,7 +425,7 @@ const SiteDetail: React.FC<SiteDetailProps> = ({ site, cleaners, entries, curren
                     return (
                       <>
                         <span className="text-sm font-semibold text-gray-900">
-                          {cleanerDisplayName || "Cleaner"}
+                          {cleanerDisplayName || "Worker"}
                         </span>
                         {showAssignmentName && (
                           <span className="text-[11px] text-gray-400">
@@ -454,7 +454,7 @@ const SiteDetail: React.FC<SiteDetailProps> = ({ site, cleaners, entries, curren
           <div className="border border-dashed border-[#edeef0] rounded-lg p-4 bg-gray-50 space-y-3">
             <div className="flex items-center justify-between">
               <p className="text-xs font-semibold text-gray-700">
-                Assign cleaner to {site.name}
+                Assign worker to {site.name}
               </p>
               <button
                 type="button"
@@ -469,7 +469,7 @@ const SiteDetail: React.FC<SiteDetailProps> = ({ site, cleaners, entries, curren
             </div>
             <div>
               <label className="block text-[10px] font-bold text-gray-400 uppercase mb-1">
-                Cleaner
+                Worker
               </label>
               <div className="relative">
                 <input
@@ -480,7 +480,7 @@ const SiteDetail: React.FC<SiteDetailProps> = ({ site, cleaners, entries, curren
                     setAssignCleanerSearch(value);
                     setAssignCleanerId('');
                   }}
-                  placeholder="Start typing cleaner name…"
+                  placeholder="Start typing worker name…"
                   className="w-full border border-[#edeef0] rounded-lg px-3 py-2 text-sm bg-white"
                   autoComplete="off"
                 />
@@ -507,7 +507,7 @@ const SiteDetail: React.FC<SiteDetailProps> = ({ site, cleaners, entries, curren
               </div>
               {availableCleanersForAssignment.length === 0 && (
                 <p className="mt-1 text-[11px] text-gray-400">
-                  All cleaners are already assigned to this site.
+                  All workers are already assigned to this site.
                 </p>
               )}
             </div>

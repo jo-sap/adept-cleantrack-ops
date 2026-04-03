@@ -8,6 +8,7 @@ interface AuthContextType {
   profile: Profile | null;
   isAdmin: boolean;
   isManager: boolean;
+  isAccounts: boolean;
   loading: boolean;
   logout: () => Promise<void>;
   setRole: (role: Role) => void;
@@ -23,6 +24,7 @@ export const RoleProvider: FC<{ children: ReactNode }> = ({ children }) => {
     const r = String(user?.role ?? "").trim().toLowerCase();
     if (r === "admin") return "admin";
     if (r === "manager") return "manager";
+    if (r === "accounts" || r === "financial controller" || r === "financialcontroller") return "accounts";
     return null;
   }, [user?.role]);
 
@@ -45,6 +47,7 @@ export const RoleProvider: FC<{ children: ReactNode }> = ({ children }) => {
 
   const isAdmin = role === "admin";
   const isManager = role === "manager";
+  const isAccounts = role === "accounts";
 
   return (
     <AuthContext.Provider value={{ 
@@ -52,6 +55,7 @@ export const RoleProvider: FC<{ children: ReactNode }> = ({ children }) => {
       profile, 
       isAdmin, 
       isManager, 
+      isAccounts,
       loading,
       logout,
       setRole

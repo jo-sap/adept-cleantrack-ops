@@ -354,6 +354,7 @@ export function toAppSite(
   monthlyExceptionDayOfMonth?: number | null;
   assigned_cleaner_ids: string[];
   financial_budget: number;
+  fortnight_cost_budget?: number;
   cleaner_rates: Record<string, number>;
   visit_frequency?: string;
   budget_labour_rate?: number;
@@ -408,6 +409,7 @@ export function toAppSite(
     ...(dailyBudgetsWeek2 ? { daily_budgets_week2: dailyBudgetsWeek2 } : {}),
     assigned_cleaner_ids: [],
     financial_budget: 0,
+    ...(budget?.fortnightCostBudget != null && { fortnight_cost_budget: budget.fortnightCostBudget }),
     cleaner_rates: {},
     ...(budget?.visitFrequency && { visit_frequency: budget.visitFrequency }),
     ...(budget?.monthlyMode !== undefined ? { monthlyMode: budget.monthlyMode ?? null } : {}),

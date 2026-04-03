@@ -1,6 +1,6 @@
 
 import React from 'react';
-import { LayoutDashboard, Building2, Users, Clock, ChevronRight, X, Briefcase } from 'lucide-react';
+import { LayoutDashboard, Building2, Users, Clock, ChevronRight, X, Briefcase, ReceiptText } from 'lucide-react';
 import { ViewType } from '../types';
 import { useAppAuth } from '../contexts/AppAuthContext';
 
@@ -23,14 +23,21 @@ const Sidebar: React.FC<SidebarProps> = ({ currentView, onViewChange, mobileOpen
   };
 
   const menuItems = [
-    { id: 'dashboard', label: 'Dashboard', icon: LayoutDashboard },
-    { id: 'sites', label: 'Sites & Budgets', icon: Building2 },
-    ...(user?.role === 'Admin'
-      ? [{ id: 'team', label: 'Team', icon: Users }]
-      : []),
-    { id: 'cleaners', label: 'Workforce', icon: Users },
-    { id: 'timesheets', label: 'Timesheets', icon: Clock },
-    { id: 'adhoc-jobs', label: 'Ad Hoc Jobs', icon: Briefcase },
+    ...(user?.role === 'Accounts'
+      ? [{ id: 'contractor-finance', label: 'Contractor Finance', icon: ReceiptText }]
+      : [
+          { id: 'dashboard', label: 'Dashboard', icon: LayoutDashboard },
+          { id: 'sites', label: 'Sites & Budgets', icon: Building2 },
+          ...(user?.role === 'Admin'
+            ? [{ id: 'team', label: 'Team', icon: Users }]
+            : []),
+          { id: 'cleaners', label: 'Workforce', icon: Users },
+          { id: 'timesheets', label: 'Timesheets', icon: Clock },
+          { id: 'adhoc-jobs', label: 'Ad Hoc Jobs', icon: Briefcase },
+          ...(user?.role === 'Admin'
+            ? [{ id: 'contractor-finance', label: 'Contractor Finance', icon: ReceiptText }]
+            : []),
+        ]),
   ];
 
   const panel = (
@@ -89,7 +96,7 @@ const Sidebar: React.FC<SidebarProps> = ({ currentView, onViewChange, mobileOpen
       <div className="px-5 py-4 mt-auto border-t border-white/5">
         <div className="flex items-center gap-3 px-2 py-2 rounded-lg transition-colors min-h-[44px] hover:bg-slate-700/70 cursor-default">
           <div className="w-7 h-7 rounded-full bg-emerald-500/10 flex items-center justify-center text-emerald-300 font-semibold text-[10px] border border-emerald-400/30">
-            {displayRole === 'Admin' ? 'AD' : displayRole === 'Manager' ? 'OM' : '—'}
+            {displayRole === 'Admin' ? 'AD' : displayRole === 'Manager' ? 'OM' : displayRole === 'Accounts' ? 'AC' : '—'}
           </div>
           <div className="flex-1 min-w-0">
             <p className="text-[12px] font-medium text-slate-50 truncate">
@@ -97,6 +104,8 @@ const Sidebar: React.FC<SidebarProps> = ({ currentView, onViewChange, mobileOpen
                 ? 'System Admin'
                 : displayRole === 'Manager'
                 ? 'Ops Manager'
+                : displayRole === 'Accounts'
+                ? 'Financial Controller'
                 : displayRole}
             </p>
             <p className="text-[11px] text-slate-400 truncate">

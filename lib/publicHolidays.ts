@@ -1,6 +1,6 @@
 /**
  * Public holiday calendar for budgeted labour cost (PH rate).
- * Default: NSW, Australia. Extend PUBLIC_HOLIDAYS or replace with SharePoint/API later.
+ * Uses embedded fallback dates plus optional automatic API sync for AU holidays.
  */
 
 import { addDays, startOfDay } from "date-fns";
@@ -33,7 +33,12 @@ const PUBLIC_HOLIDAYS_BY_STATE: Record<string, string[]> = {
   ],
 };
 
+const AU_STATE_CODES = ["NSW", "VIC", "QLD", "SA", "WA", "TAS", "ACT", "NT"] as const;
+const API_CACHE_PREFIX = "cleantrack.ph.au.";
+const API_CACHE_VERSION = "v1";
+
 const phSetByState = new Map<string, Set<string>>();
+const loadedApiYears = new Set<number>();
 
 function normalizeState(state: string | null | undefined): string {
   const s = String(state ?? "").trim().toUpperCase();
@@ -48,6 +53,109 @@ function getPHSet(state?: string): Set<string> {
   const set = new Set(PUBLIC_HOLIDAYS_BY_STATE[key] ?? []);
   phSetByState.set(key, set);
   return set;
+}
+
+function addDateToState(state: string, isoDate: string): void {
+  const normalizedState = normalizeState(state);
+  const key = PUBLIC_HOLIDAYS_BY_STATE[normalizedState] ? normalizedState : "NSW";
+  const set = getPHSet(key);
+  set.add(isoDate);
+}
+
+function addDateToAllStates(isoDate: string): void {
+  for (const state of AU_STATE_CODES) {
+    addDateToState(state, isoDate);
+  }
+}
+
+function cacheKeyForYear(year: number): string {
+  return `${API_CACHE_PREFIX}${year}.${API_CACHE_VERSION}`;
+}
+
+interface NagerHoliday {
+  date: string;
+  counties?: string[] | null;
+}
+
+function applyApiHolidayRows(rows: NagerHoliday[]): void {
+  for (const row of rows) {
+    const date = String(row.date ?? "").trim();
+    if (!date) continue;
+    const counties = Array.isArray(row.counties) ? row.counties : [];
+    if (counties.length === 0) {
+      // National holiday.
+      addDateToAllStates(date);
+      continue;
+    }
+    // State/territory holidays often come as AU-NSW, AU-VIC, etc.
+    for (const countyCode of counties) {
+      const suffix = String(countyCode ?? "").trim().toUpperCase().split("-").pop() ?? "";
+      if (!suffix) continue;
+      addDateToState(suffix, date);
+    }
+  }
+}
+
+function readApiCache(year: number): NagerHoliday[] {
+  if (typeof window === "undefined" || !window.localStorage) return [];
+  try {
+    const raw = window.localStorage.getItem(cacheKeyForYear(year));
+    if (!raw) return [];
+    const parsed = JSON.parse(raw) as unknown;
+    if (!Array.isArray(parsed)) return [];
+    return parsed
+      .map((r) => (r && typeof r === "object" ? (r as NagerHoliday) : null))
+      .filter((r): r is NagerHoliday => !!r && !!r.date);
+  } catch {
+    return [];
+  }
+}
+
+function writeApiCache(year: number, rows: NagerHoliday[]): void {
+  if (typeof window === "undefined" || !window.localStorage) return;
+  try {
+    window.localStorage.setItem(cacheKeyForYear(year), JSON.stringify(rows));
+  } catch {
+    // Ignore cache write failures.
+  }
+}
+
+async function fetchHolidaysFromApi(year: number): Promise<NagerHoliday[]> {
+  const url = `https://date.nager.at/api/v3/PublicHolidays/${year}/AU`;
+  const res = await fetch(url);
+  if (!res.ok) throw new Error(`Holiday API ${res.status}`);
+  const json = (await res.json()) as unknown;
+  if (!Array.isArray(json)) return [];
+  return json
+    .map((r) => (r && typeof r === "object" ? (r as NagerHoliday) : null))
+    .filter((r): r is NagerHoliday => !!r && !!r.date);
+}
+
+async function ensureHolidayYearLoaded(year: number): Promise<void> {
+  if (loadedApiYears.has(year)) return;
+  const cachedRows = readApiCache(year);
+  if (cachedRows.length > 0) {
+    applyApiHolidayRows(cachedRows);
+    loadedApiYears.add(year);
+    return;
+  }
+  try {
+    const apiRows = await fetchHolidaysFromApi(year);
+    if (apiRows.length > 0) {
+      applyApiHolidayRows(apiRows);
+      writeApiCache(year, apiRows);
+      loadedApiYears.add(year);
+    }
+  } catch {
+    // Keep embedded fallback data if API fails.
+  }
+}
+
+/** Best-effort API preload for current/next year; does not block UI logic. */
+export async function ensurePublicHolidaysLoaded(years?: number[]): Promise<void> {
+  const nowYear = new Date().getFullYear();
+  const targetYears = years && years.length > 0 ? years : [nowYear, nowYear + 1];
+  await Promise.all(targetYears.map((y) => ensureHolidayYearLoaded(y)));
 }
 
 /** Format date as YYYY-MM-DD for lookup. */

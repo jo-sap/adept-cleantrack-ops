@@ -774,7 +774,6 @@ const CleanerManager: React.FC<CleanerManagerProps> = ({ onCleanersRefresh }) =>
               <col style={{ width: canManageCleaners ? '28%' : '30%' }} />
               <col style={{ width: '14%' }} />
               <col style={{ width: '14%' }} />
-              <col style={{ width: '14%' }} />
               <col style={{ width: canManageCleaners ? '16%' : '18%' }} />
               <col style={{ width: '10%' }} />
               <col style={{ width: '10%' }} />
@@ -819,21 +818,6 @@ const CleanerManager: React.FC<CleanerManagerProps> = ({ onCleanersRefresh }) =>
                   >
                     Status
                     {cleanerSortBy === "status" &&
-                      (cleanerSortDir === "asc" ? (
-                        <ChevronUp size={10} />
-                      ) : (
-                        <ChevronDown size={10} />
-                      ))}
-                  </button>
-                </th>
-                <th className="px-1.5 py-1.5">
-                  <button
-                    type="button"
-                    onClick={() => handleCleanerSort("rate")}
-                    className="text-[9px] font-bold text-gray-500 uppercase tracking-widest inline-flex items-center gap-0.5 hover:text-gray-900 focus:outline-none focus:ring-2 focus:ring-gray-900/20 rounded"
-                  >
-                    Rate
-                    {cleanerSortBy === "rate" &&
                       (cleanerSortDir === "asc" ? (
                         <ChevronUp size={10} />
                       ) : (

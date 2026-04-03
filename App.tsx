@@ -8,6 +8,7 @@ import TimeEntryForm from './components/TimeEntryForm';
 import SiteDetail from './components/SiteDetail';
 import CleanerManager from './components/CleanerManager';
 import TeamManager from './components/TeamManager';
+import ContractorFinance from './components/ContractorFinance';
 import SignInScreen from './components/SignInScreen';
 import UnauthorizedScreen from './components/UnauthorizedScreen';
 import { DevBypassBanner } from './components/DevBypassBanner';
@@ -25,6 +26,7 @@ import { getTimesheetEntriesForRange, saveTimesheetEntriesToSharePoint, type Tim
 import { getAssignedSiteIdsForManager } from './repositories/siteManagersRepo';
 import { getActiveCleanerIdsBySite } from './repositories/assignedCleanersRepo';
 import { getFortnightForTimesheetCompletion, getFortnightForDate, isFortnightLockedForView } from './utils';
+import { ensurePublicHolidaysLoaded } from './lib/publicHolidays';
 
 const AppGate: FC = () => {
   const { authStatus, signOut } = useAppAuth();
@@ -70,6 +72,16 @@ const AppContent: FC = () => {
   const [currentPeriod, setCurrentPeriod] = useState<FortnightPeriod>(() => getFortnightForTimesheetCompletion(new Date()));
   const [dataLoading, setDataLoading] = useState(true);
   const [sidebarMobileOpen, setSidebarMobileOpen] = useState(false);
+
+  useEffect(() => {
+    ensurePublicHolidaysLoaded().catch(() => {});
+  }, []);
+
+  useEffect(() => {
+    if (role === 'accounts' && currentView !== 'contractor-finance') {
+      setCurrentView('contractor-finance');
+    }
+  }, [role, currentView]);
 
   /** Normalise a raw SharePoint timesheet entry so its site/cleaner ids line up with the current app sites/cleaners.
    *  This bridges cases where list item ids drift (e.g. sites or cleaners recreated) but names stay the same. */
@@ -206,6 +218,7 @@ const AppContent: FC = () => {
           bankAccountName: c.accountName,
           bankBsb: c.bsb,
           bankAccountNumber: c.accountNumber,
+          type: c.type ?? "cleaner",
         } as Cleaner;
       })
     );
@@ -337,6 +350,8 @@ const AppContent: FC = () => {
         return <CleanerManager onCleanersRefresh={fetchCleaners} />;
       case 'adhoc-jobs':
         return <AdHocJobsManager />;
+      case 'contractor-finance':
+        return <ContractorFinance sites={sites} cleaners={cleaners} />;
       case 'site-detail':
         const site = sites.find(s => s.id === selectedSiteId);
         if (!site) return null;
@@ -438,7 +453,7 @@ const AppContent: FC = () => {
         <div className="flex-1 min-w-0 overflow-x-hidden">
           <div
             className={`flex-1 w-full mx-auto p-4 sm:p-6 lg:p-10 box-border ${
-              ['sites', 'dashboard', 'cleaners', 'team', 'adhoc-jobs'].includes(
+              ['sites', 'dashboard', 'cleaners', 'team', 'adhoc-jobs', 'contractor-finance'].includes(
                 currentView
               )
                 ? 'max-w-7xl'

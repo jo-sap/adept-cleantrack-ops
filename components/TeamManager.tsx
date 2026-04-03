@@ -6,7 +6,7 @@ import { getGraphAccessToken } from "../lib/graph";
 import { getCleanTrackUsers, upsertUser } from "../repositories/usersRepo";
 import { AppSelect } from "./ui";
 
-type RoleOption = "Admin" | "Manager";
+type RoleOption = "Admin" | "Manager" | "Accounts";
 
 interface TeamRow {
   id: string;
@@ -52,7 +52,7 @@ const TeamManager: React.FC = () => {
             id: u.id,
             fullName: u.fullName,
             email: u.email,
-            role: (u.role === "Admin" ? "Admin" : "Manager") as RoleOption,
+            role: (u.role === "Admin" ? "Admin" : u.role === "Accounts" ? "Accounts" : "Manager") as RoleOption,
             active: u.active,
           }))
         );
@@ -87,7 +87,7 @@ const TeamManager: React.FC = () => {
           id: u.id,
           fullName: u.fullName,
           email: u.email,
-          role: (u.role === "Admin" ? "Admin" : "Manager") as RoleOption,
+          role: (u.role === "Admin" ? "Admin" : u.role === "Accounts" ? "Accounts" : "Manager") as RoleOption,
           active: u.active,
         }))
       );
@@ -117,7 +117,7 @@ const TeamManager: React.FC = () => {
         <div className="min-w-0">
           <h2 className="text-2xl sm:text-3xl font-bold text-gray-900">Team</h2>
           <p className="text-gray-500 text-sm mt-1">
-            Manage Admin and Manager profiles used across Sites, Timesheets, and permissions.
+            Manage Admin, Manager, and Accounts profiles used across Sites, Timesheets, and permissions.
           </p>
         </div>
       </div>
@@ -171,6 +171,7 @@ const TeamManager: React.FC = () => {
               onChange={(v) => setFormRole(v as RoleOption)}
               options={[
                 { value: "Manager", label: "Manager" },
+                { value: "Accounts", label: "Accounts / Financial Controller" },
                 { value: "Admin", label: "Admin" },
               ]}
               disabled={formLoading}
@@ -266,6 +267,7 @@ const TeamManager: React.FC = () => {
                       }
                       options={[
                         { value: "Manager", label: "Manager" },
+                        { value: "Accounts", label: "Accounts / Financial Controller" },
                         { value: "Admin", label: "Admin" },
                       ]}
                       disabled={formLoading}

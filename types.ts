@@ -1,5 +1,5 @@
 
-export type Role = 'admin' | 'manager';
+export type Role = 'admin' | 'manager' | 'accounts';
 
 export interface Profile {
   id: string;
@@ -44,6 +44,7 @@ export interface Site {
   assigned_cleaner_ids: string[];
   monthly_revenue: number;
   financial_budget: number;
+  fortnight_cost_budget?: number;
   cleaner_rates: Record<string, number>;
   /** Weekday (Mon–Fri) rate ($/hr). From "Weekday Labour Rate" (was Budget Labour Rate). Backward compat. */
   budget_labour_rate?: number;
@@ -241,4 +242,5 @@ export type ViewType =
   | 'cleaners'
   | 'timesheets'
   | 'adhoc-jobs'
+  | 'contractor-finance'
   | 'site-detail';
